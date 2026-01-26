@@ -1,0 +1,23 @@
+{
+  "name": "create-ekka-desktop-app",
+  "version": "0.2.1",
+  "description": "Create an EKKA desktop app with built-in demo backend. No setup required.",
+  "type": "module",
+  "bin": {
+    "create-ekka-desktop-app": "./bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "template"
+  ],
+  "keywords": [
+    "ekka",
+    "desktop",
+    "scaffold",
+    "generator"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
