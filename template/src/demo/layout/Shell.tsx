@@ -52,7 +52,9 @@ export function Shell({ selectedPage, onNavigate, children, darkMode, onToggleDa
     },
     content: {
       padding: '32px 40px',
-      maxWidth: '720px',
+      width: '100%',
+      minHeight: 'calc(100vh - 64px)',
+      boxSizing: 'border-box' as const,
     },
   };
 

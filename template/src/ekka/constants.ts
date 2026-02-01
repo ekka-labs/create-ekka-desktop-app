@@ -1,76 +1,118 @@
 /**
  * EKKA Constants
  *
- * Central constants for operation names and error codes.
- * These define the contract between client and engine.
+ * Operation names and error codes.
+ * Only includes IMPLEMENTED operations.
  */
 
 // =============================================================================
-// OPERATION NAMES
+// OPERATION NAMES (only implemented ops)
 // =============================================================================
 
-/**
- * All supported RPC operation names.
- */
 export const OPS = {
   // Runtime
   RUNTIME_INFO: 'runtime.info',
 
-  // Database
-  DB_GET: 'db.get',
-  DB_PUT: 'db.put',
-  DB_DELETE: 'db.delete',
+  // Auth
+  AUTH_SET: 'auth.set',
 
-  // Queue
-  QUEUE_ENQUEUE: 'queue.enqueue',
-  QUEUE_CLAIM: 'queue.claim',
-  QUEUE_ACK: 'queue.ack',
-  QUEUE_NACK: 'queue.nack',
-  QUEUE_HEARTBEAT: 'queue.heartbeat',
+  // Node Session
+  NODE_SESSION_ENSURE_IDENTITY: 'nodeSession.ensureIdentity',
+  NODE_SESSION_BOOTSTRAP: 'nodeSession.bootstrap',
+  NODE_SESSION_STATUS: 'nodeSession.status',
 
-  // Pipeline
-  PIPELINE_SUBMIT: 'pipeline.submit',
-  PIPELINE_EVENTS: 'pipeline.events',
+  // Runner
+  RUNNER_STATUS: 'runner.status',
 
-  // Vault
-  VAULT_INIT: 'vault.init',
-  VAULT_IS_INITIALIZED: 'vault.isInitialized',
-  VAULT_INSTALL: 'vault.install',
-  VAULT_LIST_BUNDLES: 'vault.listBundles',
-  VAULT_SHOW_POLICY: 'vault.showPolicy',
+  // Home
+  HOME_STATUS: 'home.status',
+  HOME_GRANT: 'home.grant',
+
+  // Paths
+  PATHS_CHECK: 'paths.check',
+  PATHS_LIST: 'paths.list',
+  PATHS_GET: 'paths.get',
+  PATHS_REQUEST: 'paths.request',
+  PATHS_REMOVE: 'paths.remove',
+
+  // Vault - Status/Capabilities
+  VAULT_STATUS: 'vault.status',
+  VAULT_CAPABILITIES: 'vault.capabilities',
+
+  // Vault - Secrets
+  VAULT_SECRETS_LIST: 'vault.secrets.list',
+  VAULT_SECRETS_GET: 'vault.secrets.get',
+  VAULT_SECRETS_CREATE: 'vault.secrets.create',
+  VAULT_SECRETS_UPDATE: 'vault.secrets.update',
+  VAULT_SECRETS_DELETE: 'vault.secrets.delete',
+  VAULT_SECRETS_UPSERT: 'vault.secrets.upsert',
+
+  // Vault - Bundles
+  VAULT_BUNDLES_LIST: 'vault.bundles.list',
+  VAULT_BUNDLES_GET: 'vault.bundles.get',
+  VAULT_BUNDLES_CREATE: 'vault.bundles.create',
+  VAULT_BUNDLES_RENAME: 'vault.bundles.rename',
+  VAULT_BUNDLES_DELETE: 'vault.bundles.delete',
+  VAULT_BUNDLES_LIST_SECRETS: 'vault.bundles.listSecrets',
+  VAULT_BUNDLES_ADD_SECRET: 'vault.bundles.addSecret',
+  VAULT_BUNDLES_REMOVE_SECRET: 'vault.bundles.removeSecret',
+
+  // Vault - Files
+  VAULT_FILES_WRITE_TEXT: 'vault.files.writeText',
+  VAULT_FILES_WRITE_BYTES: 'vault.files.writeBytes',
+  VAULT_FILES_READ_TEXT: 'vault.files.readText',
+  VAULT_FILES_READ_BYTES: 'vault.files.readBytes',
+  VAULT_FILES_LIST: 'vault.files.list',
+  VAULT_FILES_EXISTS: 'vault.files.exists',
+  VAULT_FILES_DELETE: 'vault.files.delete',
+  VAULT_FILES_MKDIR: 'vault.files.mkdir',
+  VAULT_FILES_MOVE: 'vault.files.move',
+
+  // Vault - Injection (DEFERRED - returns NOT_IMPLEMENTED)
+  VAULT_ATTACH_SECRETS_TO_CONNECTOR: 'vault.attachSecretsToConnector',
+  VAULT_INJECT_SECRETS_INTO_RUN: 'vault.injectSecretsIntoRun',
+
+  // Vault - Audit
+  VAULT_AUDIT_LIST: 'vault.audit.list',
 } as const;
 
-/**
- * Operation name type.
- */
 export type OpName = (typeof OPS)[keyof typeof OPS];
 
 // =============================================================================
 // ERROR CODES
 // =============================================================================
 
-/**
- * Standard error codes returned by the engine.
- */
 export const ERROR_CODES = {
   NOT_CONNECTED: 'NOT_CONNECTED',
-  ENGINE_NOT_PRESENT: 'ENGINE_NOT_PRESENT',
-  NOT_IMPLEMENTED: 'NOT_IMPLEMENTED',
+  NOT_AUTHENTICATED: 'NOT_AUTHENTICATED',
+  HOME_GRANT_REQUIRED: 'HOME_GRANT_REQUIRED',
   INVALID_OP: 'INVALID_OP',
   INVALID_PAYLOAD: 'INVALID_PAYLOAD',
   INTERNAL_ERROR: 'INTERNAL_ERROR',
+
+  // Vault
+  VAULT_NOT_INITIALIZED: 'VAULT_NOT_INITIALIZED',
+  VAULT_ERROR: 'VAULT_ERROR',
+  SECRET_NOT_FOUND: 'SECRET_NOT_FOUND',
+  SECRET_ALREADY_EXISTS: 'SECRET_ALREADY_EXISTS',
+  BUNDLE_NOT_FOUND: 'BUNDLE_NOT_FOUND',
+  BUNDLE_ALREADY_EXISTS: 'BUNDLE_ALREADY_EXISTS',
+
+  // Files
+  FILE_NOT_FOUND: 'FILE_NOT_FOUND',
+  FILE_ALREADY_EXISTS: 'FILE_ALREADY_EXISTS',
+  DIRECTORY_NOT_EMPTY: 'DIRECTORY_NOT_EMPTY',
+  INVALID_PATH: 'INVALID_PATH',
+  PATH_TRAVERSAL_DENIED: 'PATH_TRAVERSAL_DENIED',
+
+  // Deferred
+  NOT_IMPLEMENTED: 'NOT_IMPLEMENTED',
 } as const;
 
-/**
- * Error code type.
- */
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
 
 // =============================================================================
 // CONTRACT VERSION
 // =============================================================================
 
-/**
- * Current contract version.
- */
-export const CONTRACT_VERSION = 1;
+export const CONTRACT_VERSION = 2;

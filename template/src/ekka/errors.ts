@@ -2,14 +2,9 @@
  * EKKA Error Classes
  *
  * Custom error types for the EKKA client library.
- * All errors extend the base EkkaError class.
  */
 
 import { ERROR_CODES } from './constants';
-
-// =============================================================================
-// BASE ERROR
-// =============================================================================
 
 /**
  * Base error class for all EKKA errors.
@@ -24,10 +19,6 @@ export class EkkaError extends Error {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
-
-// =============================================================================
-// SPECIFIC ERRORS
-// =============================================================================
 
 /**
  * Thrown when an operation is attempted without a connection.
@@ -59,15 +50,5 @@ export class EkkaApiError extends EkkaError {
     super(message, code);
     this.name = 'EkkaApiError';
     this.httpStatus = httpStatus;
-  }
-}
-
-/**
- * Thrown when the engine is not present.
- */
-export class EkkaEngineNotPresentError extends EkkaError {
-  constructor() {
-    super('Engine not present. Running in demo mode.', ERROR_CODES.ENGINE_NOT_PRESENT);
-    this.name = 'EkkaEngineNotPresentError';
   }
 }

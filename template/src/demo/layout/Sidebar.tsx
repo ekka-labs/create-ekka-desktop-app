@@ -1,18 +1,11 @@
 /**
  * Sidebar Navigation
- * Professional admin-style left navigation with Settings at bottom
- * Supports light/dark mode
+ * Clean admin-style left navigation
  */
 
-import { CSSProperties } from 'react';
+import { type CSSProperties, type ReactElement } from 'react';
 
-export type Page = 'stateful-data' | 'async-work' | 'settings';
-
-interface NavItem {
-  id: string;
-  label: string;
-  disabled?: boolean;
-}
+export type Page = 'audit-log' | 'path-permissions' | 'vault' | 'doc-gen' | 'runner' | 'system';
 
 interface SidebarProps {
   selectedPage: Page;
@@ -20,18 +13,7 @@ interface SidebarProps {
   darkMode: boolean;
 }
 
-const demoItems: NavItem[] = [
-  { id: 'stateful-data', label: 'Stateful Data' },
-  { id: 'async-work', label: 'Asynchronous Work' },
-];
-
-const futureItems: NavItem[] = [
-  { id: 'execution', label: 'Execution', disabled: true },
-  { id: 'policies', label: 'Policies', disabled: true },
-  { id: 'audit', label: 'Audit', disabled: true },
-];
-
-export function Sidebar({ selectedPage, onNavigate, darkMode }: SidebarProps) {
+export function Sidebar({ selectedPage, onNavigate, darkMode }: SidebarProps): ReactElement {
   const colors = {
     bg: darkMode ? '#2c2c2e' : '#f5f5f7',
     border: darkMode ? '#3a3a3c' : '#e5e5e5',
@@ -77,7 +59,9 @@ export function Sidebar({ selectedPage, onNavigate, darkMode }: SidebarProps) {
       marginTop: '4px',
     },
     navItem: {
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
       width: '100%',
       padding: '8px 10px',
       margin: '1px 0',
@@ -87,7 +71,7 @@ export function Sidebar({ selectedPage, onNavigate, darkMode }: SidebarProps) {
       fontSize: '13px',
       fontWeight: 400,
       color: colors.text,
-      textAlign: 'left',
+      textAlign: 'left' as const,
       cursor: 'pointer',
       transition: 'background 0.15s ease',
     },
@@ -95,70 +79,41 @@ export function Sidebar({ selectedPage, onNavigate, darkMode }: SidebarProps) {
       background: colors.active,
       fontWeight: 500,
     },
-    navItemDisabled: {
-      color: colors.textMuted,
-      cursor: 'default',
-    },
-    comingSoon: {
-      fontSize: '10px',
-      color: colors.textMuted,
-      marginLeft: '6px',
-      fontWeight: 400,
-    },
     bottomSection: {
       padding: '8px',
       borderTop: `1px solid ${colors.border}`,
     },
-    settingsItem: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '8px',
-      width: '100%',
-      padding: '8px 10px',
-      background: 'transparent',
-      border: 'none',
-      borderRadius: '6px',
-      fontSize: '13px',
-      fontWeight: 400,
-      color: colors.text,
-      textAlign: 'left',
-      cursor: 'pointer',
-      transition: 'background 0.15s ease',
-    },
   };
 
-  const renderNavItem = (item: NavItem) => {
-    const isActive = selectedPage === item.id;
-    const isDisabled = item.disabled;
-
+  const NavButton = ({
+    page,
+    label,
+    icon,
+  }: {
+    page: Page;
+    label: string;
+    icon: ReactElement;
+  }) => {
+    const isActive = selectedPage === page;
     return (
       <button
-        key={item.id}
-        onClick={() => !isDisabled && onNavigate(item.id as Page)}
+        onClick={() => onNavigate(page)}
         style={{
           ...styles.navItem,
           ...(isActive ? styles.navItemActive : {}),
-          ...(isDisabled ? styles.navItemDisabled : {}),
         }}
         onMouseEnter={(e) => {
-          if (!isDisabled && !isActive) {
-            e.currentTarget.style.background = colors.hover;
-          }
+          if (!isActive) e.currentTarget.style.background = colors.hover;
         }}
         onMouseLeave={(e) => {
-          if (!isActive) {
-            e.currentTarget.style.background = 'transparent';
-          }
+          if (!isActive) e.currentTarget.style.background = 'transparent';
         }}
-        disabled={isDisabled}
       >
-        {item.label}
-        {isDisabled && <span style={styles.comingSoon}>Soon</span>}
+        {icon}
+        {label}
       </button>
     );
   };
-
-  const isSettingsActive = selectedPage === 'settings';
 
   return (
     <aside style={styles.sidebar}>
@@ -167,50 +122,71 @@ export function Sidebar({ selectedPage, onNavigate, darkMode }: SidebarProps) {
       </div>
 
       <nav style={styles.nav}>
-        <div style={styles.sectionLabel}>Demo</div>
-        {demoItems.map(renderNavItem)}
-
-        <div style={{ ...styles.sectionLabel, marginTop: '16px' }}>Coming Soon</div>
-        {futureItems.map(renderNavItem)}
+        <div style={styles.sectionLabel}>Tools</div>
+        <NavButton page="path-permissions" label="Path Permissions" icon={<PathIcon />} />
+        <NavButton page="vault" label="Vault" icon={<VaultIcon />} />
+        <NavButton page="doc-gen" label="Generate Docs" icon={<DocGenIcon />} />
+        <NavButton page="runner" label="Runner" icon={<RunnerIcon />} />
+        <NavButton page="audit-log" label="Audit Log" icon={<AuditIcon />} />
       </nav>
 
       <div style={styles.bottomSection}>
-        <button
-          onClick={() => onNavigate('settings')}
-          style={{
-            ...styles.settingsItem,
-            ...(isSettingsActive ? styles.navItemActive : {}),
-          }}
-          onMouseEnter={(e) => {
-            if (!isSettingsActive) {
-              e.currentTarget.style.background = colors.hover;
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (!isSettingsActive) {
-              e.currentTarget.style.background = 'transparent';
-            }
-          }}
-        >
-          <SettingsIcon />
-          Settings
-        </button>
+        <NavButton page="system" label="System" icon={<SystemIcon />} />
       </div>
     </aside>
   );
 }
 
-function SettingsIcon() {
+function PathIcon(): ReactElement {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ opacity: 0.7 }}>
-      <path
-        d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM6.754 8a1.246 1.246 0 1 1 2.492 0 1.246 1.246 0 0 1-2.492 0z"
-        fill="currentColor"
-      />
-      <path
-        d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319zm-2.633.283c.246-.835 1.428-.835 1.674 0l.094.319a1.873 1.873 0 0 0 2.693 1.115l.291-.16c.764-.415 1.6.42 1.184 1.185l-.159.292a1.873 1.873 0 0 0 1.116 2.692l.318.094c.835.246.835 1.428 0 1.674l-.319.094a1.873 1.873 0 0 0-1.115 2.693l.16.291c.415.764-.421 1.6-1.185 1.184l-.291-.159a1.873 1.873 0 0 0-2.693 1.116l-.094.318c-.246.835-1.428.835-1.674 0l-.094-.319a1.873 1.873 0 0 0-2.692-1.115l-.292.16c-.764.415-1.6-.421-1.184-1.185l.159-.291a1.873 1.873 0 0 0-1.116-2.693l-.318-.094c-.835-.246-.835-1.428 0-1.674l.319-.094a1.873 1.873 0 0 0 1.115-2.692l-.16-.292c-.415-.764.421-1.6 1.185-1.184l.292.159a1.873 1.873 0 0 0 2.692-1.116l.094-.318z"
-        fill="currentColor"
-      />
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
+      <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.764.382 2.236 1l.472.707c.188.282.51.543 1.028.543h4.5A1.5 1.5 0 0 1 15 5.75v6.75A1.5 1.5 0 0 1 13.5 14h-11A1.5 1.5 0 0 1 1 12.5v-9zm1.5-.5a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V5.75a.5.5 0 0 0-.5-.5H9a2.016 2.016 0 0 1-1.528-.793l-.472-.707C6.764 3.393 6.366 3 5.264 3H2.5z" />
+    </svg>
+  );
+}
+
+function AuditIcon(): ReactElement {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
+      <path d="M2.5 2a.5.5 0 0 0-.5.5v11a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5h-11zm0-1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11A1.5 1.5 0 0 1 2.5 1z" />
+      <path d="M4 4.5a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5zm0 3a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5zm0 3a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 0 1h-4a.5.5 0 0 1-.5-.5z" />
+    </svg>
+  );
+}
+
+function VaultIcon(): ReactElement {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
+      <path d="M4 4a3 3 0 0 1 3-3h2a3 3 0 0 1 3 3v1h1a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h1V4zm3-2a2 2 0 0 0-2 2v1h6V4a2 2 0 0 0-2-2H7zM3 6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1H3z" />
+      <path d="M8 9a1 1 0 0 0-1 1v1a1 1 0 1 0 2 0v-1a1 1 0 0 0-1-1z" />
+    </svg>
+  );
+}
+
+function SystemIcon(): ReactElement {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
+      <path d="M8 0L1 3v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V3L8 0zm0 1.2L14 3.7v4.8c0 3.8-2.5 6.3-6 7.7-3.5-1.4-6-3.9-6-7.7V3.7L8 1.2z" />
+      <path d="M6.5 7.5L5 9l2 2 4-4-1.5-1.5L7 8l-.5-.5z" />
+    </svg>
+  );
+}
+
+function DocGenIcon(): ReactElement {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
+      <path d="M14 4.5V14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2h5.5L14 4.5zM9.5 4V1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4.5h-3.5z" />
+      <path d="M4.5 12.5A.5.5 0 0 1 5 12h3a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5zm0-2A.5.5 0 0 1 5 10h6a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5zm0-2A.5.5 0 0 1 5 8h6a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5zm0-2A.5.5 0 0 1 5 6h6a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5z" />
+    </svg>
+  );
+}
+
+function RunnerIcon(): ReactElement {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
+      <path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z" />
+      <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z" />
+      <path d="M8 8a.5.5 0 1 1 0-1 .5.5 0 0 1 0 1z" />
     </svg>
   );
 }

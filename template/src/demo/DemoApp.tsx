@@ -1,26 +1,38 @@
 /**
  * EKKA Demo App
- * Professional admin-style UI with left navigation and dark mode
+ *
+ * Flow:
+ * 1. Connect to engine
+ * 2. Check auth - if not logged in, show LoginPage
+ * 3. After login, check home.status
+ * 4. If not HOME_GRANTED, show HomeSetupPage
+ * 5. Show main app when HOME_GRANTED
  */
 
-import { useState, useEffect, type ReactElement } from 'react';
-import { ekka, EkkaError } from '../ekka';
+import { useState, useEffect, type ReactElement, type CSSProperties } from 'react';
+import { ekka, advanced, EkkaError, addAuditEvent, type HomeStatus } from '../ekka';
 import { Shell } from './layout/Shell';
-import { Page } from './layout/Sidebar';
-import { StatefulData } from './pages/StatefulData';
-import { AsyncWork } from './pages/AsyncWork';
-import { SettingsPage } from './pages/SettingsPage';
+import { type Page } from './layout/Sidebar';
+import { SystemPage } from './pages/SystemPage';
+import { AuditLogPage } from './pages/AuditLogPage';
+import { PathPermissionsPage } from './pages/PathPermissionsPage';
+import { VaultPage } from './pages/VaultPage';
+import { DocGenPage } from './pages/DocGenPage';
+import { RunnerPage } from './pages/RunnerPage';
+import { LoginPage } from './pages/LoginPage';
+import { HomeSetupPage } from './pages/HomeSetupPage';
+
+type AppState = 'loading' | 'login' | 'home-setup' | 'ready';
 
 interface DemoState {
+  appState: AppState;
+  homeStatus: HomeStatus | null;
   connected: boolean;
-  connecting: boolean;
   error: string | null;
-  dbValue: string | null;
-  queueJobId: string | null;
 }
 
 export function DemoApp(): ReactElement {
-  const [selectedPage, setSelectedPage] = useState<Page>('stateful-data');
+  const [selectedPage, setSelectedPage] = useState<Page>('path-permissions');
   const [darkMode, setDarkMode] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       return window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -28,51 +40,110 @@ export function DemoApp(): ReactElement {
     return false;
   });
   const [state, setState] = useState<DemoState>({
+    appState: 'loading',
+    homeStatus: null,
     connected: false,
-    connecting: false,
     error: null,
-    dbValue: null,
-    queueJobId: null,
   });
 
-  const [inputKey, setInputKey] = useState('demo-key');
-  const [inputValue, setInputValue] = useState('Hello EKKA!');
-  const [queueKind, setQueueKind] = useState('demo-job');
-  const [queuePayload, setQueuePayload] = useState('{"message": "Hello from queue"}');
-
   useEffect(() => {
-    void handleConnect();
+    void initializeApp();
   }, []);
 
-  async function handleConnect(): Promise<void> {
-    setState((s) => ({ ...s, connecting: true, error: null }));
+  async function initializeApp(): Promise<void> {
     try {
-      await ekka.init();
       await ekka.connect();
-      setState((s) => ({ ...s, connected: true, connecting: false }));
+      setState((s) => ({ ...s, connected: true }));
+
+      addAuditEvent({
+        type: 'connection.established',
+        description: 'Connected to EKKA backend',
+        technical: { mode: advanced.internal.mode() },
+      });
+
+      if (!ekka.auth.isLoggedIn()) {
+        setState((s) => ({ ...s, appState: 'login' }));
+        return;
+      }
+
+      const user = ekka.auth.user();
+      if (user) {
+        const tenantId = user.company?.id || 'default';
+        await advanced.auth.setContext({ tenantId, sub: user.id, jwt: '' });
+      }
+
+      await checkHomeStatus();
     } catch (err: unknown) {
-      const message = err instanceof EkkaError ? err.message : 'Unknown error';
-      setState((s) => ({ ...s, connecting: false, error: message }));
+      const message = err instanceof EkkaError ? err.message : 'Connection failed';
+      setState((s) => ({ ...s, error: message, appState: 'login' }));
+
+      addAuditEvent({
+        type: 'connection.failed',
+        description: 'Failed to connect to EKKA backend',
+        technical: { error: message },
+      });
     }
   }
 
-  function handleError(error: string | null): void {
-    setState((s) => ({ ...s, error }));
+  async function checkHomeStatus(): Promise<void> {
+    try {
+      const status = await advanced.home.status();
+      setState((s) => ({ ...s, homeStatus: status }));
+
+      if (status.state === 'HOME_GRANTED') {
+        setState((s) => ({ ...s, appState: 'ready' }));
+      } else if (status.state === 'AUTHENTICATED_NO_HOME_GRANT') {
+        setState((s) => ({ ...s, appState: 'home-setup' }));
+      } else {
+        setState((s) => ({ ...s, appState: 'login' }));
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to check home status';
+      setState((s) => ({ ...s, error: message }));
+    }
   }
 
-  function handleDbValueChange(value: string | null): void {
-    setState((s) => ({ ...s, dbValue: value }));
+  async function handleLoginSuccess(): Promise<void> {
+    await checkHomeStatus();
   }
 
-  function handleJobIdChange(jobId: string | null): void {
-    setState((s) => ({ ...s, queueJobId: jobId }));
+  function handleHomeGranted(): void {
+    setState((s) => ({ ...s, appState: 'ready' }));
   }
 
-  function toggleDarkMode(): void {
-    setDarkMode((prev) => !prev);
+  // Loading
+  if (state.appState === 'loading') {
+    const style: CSSProperties = {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: '100vh',
+      background: darkMode ? '#1c1c1e' : '#ffffff',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
+      color: darkMode ? '#98989d' : '#86868b',
+      fontSize: '14px',
+    };
+    return <div style={style}>Connecting...</div>;
   }
 
-  const errorStyle: React.CSSProperties = {
+  // Login
+  if (state.appState === 'login') {
+    return <LoginPage onLoginSuccess={handleLoginSuccess} darkMode={darkMode} />;
+  }
+
+  // Home setup
+  if (state.appState === 'home-setup' && state.homeStatus) {
+    return (
+      <HomeSetupPage
+        homeStatus={state.homeStatus}
+        onGranted={handleHomeGranted}
+        darkMode={darkMode}
+      />
+    );
+  }
+
+  // Main app
+  const errorStyle: CSSProperties = {
     marginBottom: '20px',
     padding: '12px 14px',
     background: darkMode ? '#3c1618' : '#fef2f2',
@@ -87,39 +158,15 @@ export function DemoApp(): ReactElement {
       selectedPage={selectedPage}
       onNavigate={setSelectedPage}
       darkMode={darkMode}
-      onToggleDarkMode={toggleDarkMode}
+      onToggleDarkMode={() => setDarkMode((prev) => !prev)}
     >
       {state.error && <div style={errorStyle}>{state.error}</div>}
-
-      {selectedPage === 'stateful-data' && (
-        <StatefulData
-          connected={state.connected}
-          inputKey={inputKey}
-          inputValue={inputValue}
-          dbValue={state.dbValue}
-          onKeyChange={setInputKey}
-          onValueChange={setInputValue}
-          onDbValueChange={handleDbValueChange}
-          onError={handleError}
-          darkMode={darkMode}
-        />
-      )}
-
-      {selectedPage === 'async-work' && (
-        <AsyncWork
-          connected={state.connected}
-          queueKind={queueKind}
-          queuePayload={queuePayload}
-          queueJobId={state.queueJobId}
-          onKindChange={setQueueKind}
-          onPayloadChange={setQueuePayload}
-          onJobIdChange={handleJobIdChange}
-          onError={handleError}
-          darkMode={darkMode}
-        />
-      )}
-
-      {selectedPage === 'settings' && <SettingsPage darkMode={darkMode} />}
+      {selectedPage === 'path-permissions' && <PathPermissionsPage darkMode={darkMode} />}
+      {selectedPage === 'vault' && <VaultPage darkMode={darkMode} />}
+      {selectedPage === 'doc-gen' && <DocGenPage darkMode={darkMode} />}
+      {selectedPage === 'runner' && <RunnerPage darkMode={darkMode} />}
+      {selectedPage === 'audit-log' && <AuditLogPage darkMode={darkMode} />}
+      {selectedPage === 'system' && <SystemPage darkMode={darkMode} />}
     </Shell>
   );
 }
