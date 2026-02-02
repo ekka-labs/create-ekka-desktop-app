@@ -2,6 +2,10 @@
 node_modules/
 .npm-cache/
 
+# Lockfile - each generated app should resolve fresh versions
+# This ensures Rust tauri and JS @tauri-apps versions stay aligned
+package-lock.json
+
 # Build output
 dist/
 
