@@ -33,6 +33,27 @@ const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
 pkg.name = projectName;
 writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
+// Update branding/app.json with project name
+const brandingPath = join(targetDir, 'branding', 'app.json');
+const branding = JSON.parse(readFileSync(brandingPath, 'utf8'));
+// Convert project-name to "Project Name" for display
+const displayName = projectName
+  .split('-')
+  .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+  .join(' ');
+// Convert project-name to ai.ekka.projectname for bundleId
+const bundleId = `ai.ekka.${projectName.replace(/-/g, '')}`;
+branding.name = displayName;
+branding.bundleId = bundleId;
+writeFileSync(brandingPath, JSON.stringify(branding, null, 2) + '\n');
+
+// Update src-tauri/Cargo.toml crate name
+const cargoPath = join(targetDir, 'src-tauri', 'Cargo.toml');
+let cargoContent = readFileSync(cargoPath, 'utf8');
+cargoContent = cargoContent.replace(/^name = ".*"$/m, `name = "${projectName}"`);
+cargoContent = cargoContent.replace(/^description = ".*"$/m, `description = "${displayName}"`);
+writeFileSync(cargoPath, cargoContent);
+
 console.log(`
 Done! To get started:
 

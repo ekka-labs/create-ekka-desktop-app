@@ -90,32 +90,19 @@ fn app_name_to_slug(name: &str) -> String {
 }
 
 /// Compute home path based on app name
+/// Default: ~/.{slug} (dot-home) for all platforms
+/// Override: Set EKKA_DATA_HOME env var for custom location
 fn compute_home_path(app_name: &str) -> PathBuf {
     let slug = app_name_to_slug(app_name);
 
-    // Use OS-specific data directory
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(home) = dirs::home_dir() {
-            return home.join("Library").join("Application Support").join(&slug);
+    // Check for env override first
+    if let Ok(env_path) = std::env::var("EKKA_DATA_HOME") {
+        if !env_path.is_empty() {
+            return PathBuf::from(env_path);
         }
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(data) = dirs::data_local_dir() {
-            return data.join(&slug);
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(data) = dirs::data_dir() {
-            return data.join(&slug);
-        }
-    }
-
-    // Fallback to home directory with dot-prefix
+    // Default: dot-home (~/.{slug}) for all platforms
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join(format!(".{}", slug))
@@ -343,7 +330,7 @@ fn engine_request(req: EngineRequest, state: State<EngineState>) -> EngineRespon
 
         // Paths (stub - return empty/demo)
         "paths.check" => EngineResponse::ok(json!({ "allowed": false, "reason": "Demo mode" })),
-        "paths.list" => EngineResponse::ok(json!({ "grants": [] })),
+        "paths.list" => EngineResponse::ok(json!({ "paths": [] })),
         "paths.get" => EngineResponse::err("NOT_FOUND", "No grants in demo mode"),
         "paths.request" => EngineResponse::err("NOT_IMPLEMENTED", "Path grants not available in demo mode"),
         "paths.remove" => EngineResponse::err("NOT_IMPLEMENTED", "Path grants not available in demo mode"),
