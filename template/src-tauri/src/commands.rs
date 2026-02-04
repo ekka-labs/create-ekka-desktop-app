@@ -3,6 +3,7 @@
 //! Entry points for TypeScript → Rust communication.
 
 use crate::bootstrap::initialize_home;
+use crate::config;
 use crate::engine_process;
 use crate::grants::require_home_granted;
 use crate::handlers;
@@ -541,7 +542,7 @@ fn handle_runner_task_stats(state: &EngineState) -> EngineResponse {
         .header("X-EKKA-CORRELATION-ID", &request_id)
         .header("X-EKKA-MODULE", "engine.runner_tasks")
         .header("X-EKKA-ACTION", "stats")
-        .header("X-EKKA-CLIENT", "ekka-desktop")
+        .header("X-EKKA-CLIENT", config::app_slug())
         .header("X-EKKA-CLIENT-VERSION", "0.2.0")
         .send();
 
@@ -902,7 +903,7 @@ fn build_security_headers(jwt: Option<&str>, module: &str, action: &str) -> Vec<
         ("X-EKKA-PROOF-TYPE".to_string(), if jwt.is_some() { "jwt" } else { "none" }.to_string()),
         ("X-EKKA-MODULE".to_string(), module.to_string()),
         ("X-EKKA-ACTION".to_string(), action.to_string()),
-        ("X-EKKA-CLIENT".to_string(), "ekka-desktop".to_string()),
+        ("X-EKKA-CLIENT".to_string(), config::app_slug().to_string()),
         ("X-EKKA-CLIENT-VERSION".to_string(), "0.2.0".to_string()),
     ];
 

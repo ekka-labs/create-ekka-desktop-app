@@ -7,6 +7,7 @@
 
 mod bootstrap;
 mod commands;
+mod config;
 mod device_secret;
 mod engine_process;
 mod grants;

@@ -17,6 +17,7 @@
 
 #![allow(dead_code)] // API types may not all be used yet
 
+use crate::config;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
@@ -240,7 +241,8 @@ pub fn get_private_key_vault_path(node_id: &Uuid) -> PathBuf {
 fn derive_node_encryption_key(node_id: &Uuid, device_fingerprint: Option<&str>) -> KeyMaterial {
     // Use node_id + device fingerprint for key derivation
     // This binds the key to this specific node on this device
-    let device_secret = device_fingerprint.unwrap_or("ekka-desktop-default-device");
+    let default_device = format!("{}-default-device", config::app_slug());
+    let device_secret = device_fingerprint.unwrap_or(&default_device);
 
     derive_key(
         device_secret,
@@ -386,7 +388,7 @@ pub fn register_node(
         "node_id": node_id.to_string(),
         "public_key_b64": public_key_b64,
         "default_workspace_id": default_workspace_id,
-        "display_name": "ekka-desktop",
+        "display_name": config::app_name(),
         "node_type": "desktop"
     });
 
@@ -403,7 +405,7 @@ pub fn register_node(
         .header("X-EKKA-CORRELATION-ID", &request_id)
         .header("X-EKKA-MODULE", "desktop.node_auth")
         .header("X-EKKA-ACTION", "register")
-        .header("X-EKKA-CLIENT", "ekka-desktop")
+        .header("X-EKKA-CLIENT", config::app_slug())
         .header("X-EKKA-CLIENT-VERSION", "0.2.0")
         .json(&body)
         .send()
@@ -459,7 +461,7 @@ pub fn get_challenge(engine_url: &str, node_id: &Uuid) -> Result<ChallengeRespon
         .header("X-EKKA-CORRELATION-ID", &request_id)
         .header("X-EKKA-MODULE", "desktop.node_auth")
         .header("X-EKKA-ACTION", "challenge")
-        .header("X-EKKA-CLIENT", "ekka-desktop")
+        .header("X-EKKA-CLIENT", config::app_slug())
         .header("X-EKKA-CLIENT-VERSION", "0.2.0")
         .json(&serde_json::json!({ "node_id": node_id.to_string() }))
         .send()
@@ -503,7 +505,7 @@ pub fn create_session(
         .header("X-EKKA-CORRELATION-ID", &request_id)
         .header("X-EKKA-MODULE", "desktop.node_auth")
         .header("X-EKKA-ACTION", "session")
-        .header("X-EKKA-CLIENT", "ekka-desktop")
+        .header("X-EKKA-CLIENT", config::app_slug())
         .header("X-EKKA-CLIENT-VERSION", "0.2.0")
         .json(&serde_json::json!({
             "node_id": node_id.to_string(),
@@ -798,7 +800,7 @@ impl NodeSessionRunnerConfig {
             ("X-REQUEST-ID", Uuid::new_v4().to_string()),
             ("X-EKKA-CORRELATION-ID", Uuid::new_v4().to_string()),
             ("X-EKKA-MODULE", "engine.runner_tasks".to_string()),
-            ("X-EKKA-CLIENT", "ekka-desktop".to_string()),
+            ("X-EKKA-CLIENT", config::app_slug().to_string()),
             ("X-EKKA-CLIENT-VERSION", "0.2.0".to_string()),
             ("X-EKKA-NODE-ID", self.node_id.to_string()),
         ]

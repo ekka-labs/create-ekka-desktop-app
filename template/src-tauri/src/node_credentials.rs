@@ -11,6 +11,7 @@
 //! - No OS keychain prompts
 
 use crate::bootstrap::{initialize_home, resolve_home_path};
+use crate::config;
 use crate::node_vault_store::{
     delete_node_secret, has_node_secret, read_node_secret, write_node_secret,
     SECRET_ID_NODE_CREDENTIALS,
@@ -394,7 +395,7 @@ pub fn authenticate_node(engine_url: &str) -> Result<NodeAuthToken, CredentialsE
         .header("X-EKKA-CORRELATION-ID", &request_id)
         .header("X-EKKA-MODULE", "desktop.node_auth")
         .header("X-EKKA-ACTION", "authenticate")
-        .header("X-EKKA-CLIENT", "ekka-desktop")
+        .header("X-EKKA-CLIENT", config::app_slug())
         .header("X-EKKA-CLIENT-VERSION", "0.2.0")
         .json(&body)
         .send()

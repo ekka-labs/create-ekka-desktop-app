@@ -17,6 +17,7 @@
 
 #![allow(dead_code)] // API types and fields may not all be used yet
 
+use crate::config;
 use crate::node_auth::{
     refresh_node_session, NodeSession, NodeSessionHolder, NodeSessionRunnerConfig,
 };
@@ -236,7 +237,7 @@ impl NodeSessionRunner {
             ("X-REQUEST-ID", Uuid::new_v4().to_string()),
             ("X-EKKA-CORRELATION-ID", Uuid::new_v4().to_string()),
             ("X-EKKA-MODULE", "engine.runner_tasks".to_string()),
-            ("X-EKKA-CLIENT", "ekka-desktop".to_string()),
+            ("X-EKKA-CLIENT", config::app_slug().to_string()),
             ("X-EKKA-CLIENT-VERSION", "0.2.0".to_string()),
             ("X-EKKA-NODE-ID", self.node_id.to_string()),
         ])
@@ -700,7 +701,7 @@ impl NodeSessionRunnerHeartbeat {
             .header("X-EKKA-CORRELATION-ID", Uuid::new_v4().to_string())
             .header("X-EKKA-MODULE", "engine.runner_tasks")
             .header("X-EKKA-ACTION", "heartbeat")
-            .header("X-EKKA-CLIENT", "ekka-desktop")
+            .header("X-EKKA-CLIENT", config::app_slug())
             .header("X-EKKA-CLIENT-VERSION", "0.2.0")
             .header("X-EKKA-NODE-ID", self.node_id.to_string())
             .json(&serde_json::json!({ "runner_id": self.runner_id }))
