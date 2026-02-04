@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Incoming request from TypeScript
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineRequest {
     pub op: String,
@@ -18,7 +18,7 @@ pub struct EngineRequest {
 }
 
 /// Response sent back to TypeScript
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EngineResponse {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,10 +28,12 @@ pub struct EngineResponse {
 }
 
 /// Error details in response
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct EngineError {
     pub code: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
 }
 
 impl EngineResponse {
@@ -62,6 +64,20 @@ impl EngineResponse {
             error: Some(EngineError {
                 code: code.to_string(),
                 message: message.to_string(),
+                status: None,
+            }),
+        }
+    }
+
+    /// Error response with HTTP status code
+    pub fn err_with_status(code: &str, message: &str, status: u16) -> Self {
+        Self {
+            ok: false,
+            result: None,
+            error: Some(EngineError {
+                code: code.to_string(),
+                message: message.to_string(),
+                status: Some(status),
             }),
         }
     }

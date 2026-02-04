@@ -27,6 +27,20 @@ import * as ops from './ops';
 
 export const ekka = {
   // ---------------------------------------------------------------------------
+  // Setup (pre-login device configuration)
+  // ---------------------------------------------------------------------------
+
+  setup: {
+    /**
+     * Get setup status.
+     * Call before login to check if setup wizard is needed.
+     * Returns { nodeIdentity, setupComplete }
+     * Home folder grant is handled post-login via HomeSetupPage.
+     */
+    status: () => ops.setup.status(),
+  },
+
+  // ---------------------------------------------------------------------------
   // Connection
   // ---------------------------------------------------------------------------
 
@@ -38,6 +52,41 @@ export const ekka = {
 
   /** Check if connected. */
   isConnected: () => _internal.isConnected(),
+
+  // ---------------------------------------------------------------------------
+  // Node Credentials (headless engine startup)
+  // ---------------------------------------------------------------------------
+
+  nodeCredentials: {
+    /**
+     * Set node credentials.
+     * Stores node_id + node_secret in OS keychain.
+     * Validates UUID format and secret length.
+     */
+    set: (nodeId: string, nodeSecret: string) =>
+      ops.nodeCredentials.set({ nodeId, nodeSecret }),
+
+    /**
+     * Get credentials status.
+     * Returns { hasCredentials, nodeId } - does NOT return secret.
+     */
+    status: () => ops.nodeCredentials.status(),
+
+    /**
+     * Clear credentials from keychain.
+     */
+    clear: () => ops.nodeCredentials.clear(),
+
+    /**
+     * Validate node_id format (UUID).
+     */
+    isValidNodeId: ops.nodeCredentials.isValidNodeId,
+
+    /**
+     * Validate node_secret format.
+     */
+    isValidNodeSecret: ops.nodeCredentials.isValidNodeSecret,
+  },
 
   // ---------------------------------------------------------------------------
   // Auth (simple - login/logout)
@@ -308,11 +357,13 @@ export const advanced = {
   },
 
   /**
-   * Runner operations (local runner status)
+   * Runner operations (local runner status + task queue stats)
    */
   runner: {
     /** Get local runner status for this desktop instance. */
     status: ops.runner.status,
+    /** Get task queue stats from engine API (proxied via Rust). */
+    taskStats: ops.runner.taskStats,
   },
 
   /**
@@ -325,6 +376,18 @@ export const advanced = {
     bootstrap: ops.nodeSession.bootstrap,
     /** Get current node session status. */
     status: ops.nodeSession.status,
+  },
+
+  /**
+   * Node credentials operations (keychain-stored)
+   */
+  nodeCredentials: {
+    /** Set node credentials in keychain. */
+    set: ops.nodeCredentials.set,
+    /** Get credentials status. */
+    status: ops.nodeCredentials.status,
+    /** Clear credentials from keychain. */
+    clear: ops.nodeCredentials.clear,
   },
 
   /**
@@ -362,6 +425,7 @@ export const advanced = {
 // TYPE EXPORTS
 // =============================================================================
 
+export type { SetupState, SetupStatus } from './ops/setup';
 export type { HomeState, HomeStatus, GrantResult } from './ops/home';
 export type {
   PathType,
@@ -372,7 +436,7 @@ export type {
   PathRequestOptions,
 } from './ops/paths';
 export type { RuntimeInfo } from './ops/runtime';
-export type { RunnerStatus, RunnerLoopState } from './ops/runner';
+export type { RunnerStatus, RunnerLoopState, RunnerTaskStats } from './ops/runner';
 export type { AuthContext } from './ops/auth';
 export type {
   NodeIdentity,
@@ -382,6 +446,12 @@ export type {
   SessionInfo,
   NodeSessionStatus,
 } from './ops/nodeSession';
+export type {
+  SetCredentialsInput,
+  SetCredentialsResult,
+  CredentialsStatus,
+  NodeAuthSession,
+} from './ops/nodeCredentials';
 export type { UserInfo, AuthTokens } from './auth/types';
 export type { TransportMode } from './internal';
 

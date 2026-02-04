@@ -10,6 +10,9 @@
 // =============================================================================
 
 export const OPS = {
+  // Setup
+  SETUP_STATUS: 'setup.status',
+
   // Runtime
   RUNTIME_INFO: 'runtime.info',
 
@@ -21,8 +24,23 @@ export const OPS = {
   NODE_SESSION_BOOTSTRAP: 'nodeSession.bootstrap',
   NODE_SESSION_STATUS: 'nodeSession.status',
 
+  // Node Credentials (keychain-stored)
+  NODE_CREDENTIALS_SET: 'nodeCredentials.set',
+  NODE_CREDENTIALS_STATUS: 'nodeCredentials.status',
+  NODE_CREDENTIALS_CLEAR: 'nodeCredentials.clear',
+
   // Runner
   RUNNER_STATUS: 'runner.status',
+  RUNNER_TASK_STATS: 'runner.taskStats',
+
+  // Workflow Runs (proxied via Rust)
+  WORKFLOW_RUNS_CREATE: 'workflowRuns.create',
+  WORKFLOW_RUNS_GET: 'workflowRuns.get',
+
+  // Auth (proxied via Rust)
+  AUTH_LOGIN: 'auth.login',
+  AUTH_REFRESH: 'auth.refresh',
+  AUTH_LOGOUT: 'auth.logout',
 
   // Home
   HOME_STATUS: 'home.status',
@@ -107,6 +125,13 @@ export const ERROR_CODES = {
 
   // Deferred
   NOT_IMPLEMENTED: 'NOT_IMPLEMENTED',
+
+  // Credentials
+  INVALID_NODE_ID: 'INVALID_NODE_ID',
+  INVALID_NODE_SECRET: 'INVALID_NODE_SECRET',
+  CREDENTIALS_STORE_ERROR: 'CREDENTIALS_STORE_ERROR',
+  CREDENTIALS_CLEAR_ERROR: 'CREDENTIALS_CLEAR_ERROR',
+  CREDENTIALS_NOT_CONFIGURED: 'CREDENTIALS_NOT_CONFIGURED',
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];

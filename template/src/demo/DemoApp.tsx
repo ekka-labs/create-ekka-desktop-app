@@ -2,15 +2,17 @@
  * EKKA Demo App
  *
  * Flow:
- * 1. Connect to engine
- * 2. Check auth - if not logged in, show LoginPage
- * 3. After login, check home.status
- * 4. If not HOME_GRANTED, show HomeSetupPage
- * 5. Show main app when HOME_GRANTED
+ * 1. Check setup status (pre-login) - only node credentials
+ * 2. If setup incomplete (no node credentials), show SetupWizard
+ * 3. Connect to engine
+ * 4. Check auth - if not logged in, show LoginPage
+ * 5. After login, check home.status for HOME grant
+ * 6. If not HOME_GRANTED, show HomeSetupPage (requests grant from engine)
+ * 7. Show main app when HOME_GRANTED
  */
 
 import { useState, useEffect, type ReactElement, type CSSProperties } from 'react';
-import { ekka, advanced, EkkaError, addAuditEvent, type HomeStatus } from '../ekka';
+import { ekka, advanced, EkkaError, addAuditEvent, type HomeStatus, type SetupStatus } from '../ekka';
 import { Shell } from './layout/Shell';
 import { type Page } from './layout/Sidebar';
 import { SystemPage } from './pages/SystemPage';
@@ -21,11 +23,13 @@ import { DocGenPage } from './pages/DocGenPage';
 import { RunnerPage } from './pages/RunnerPage';
 import { LoginPage } from './pages/LoginPage';
 import { HomeSetupPage } from './pages/HomeSetupPage';
+import { SetupWizard } from './components/SetupWizard';
 
-type AppState = 'loading' | 'login' | 'home-setup' | 'ready';
+type AppState = 'loading' | 'setup' | 'login' | 'home-setup' | 'ready';
 
 interface DemoState {
   appState: AppState;
+  setupStatus: SetupStatus | null;
   homeStatus: HomeStatus | null;
   connected: boolean;
   error: string | null;
@@ -41,6 +45,7 @@ export function DemoApp(): ReactElement {
   });
   const [state, setState] = useState<DemoState>({
     appState: 'loading',
+    setupStatus: null,
     homeStatus: null,
     connected: false,
     error: null,
@@ -52,8 +57,24 @@ export function DemoApp(): ReactElement {
 
   async function initializeApp(): Promise<void> {
     try {
+      // Step 1: Check setup status BEFORE connect (pre-login)
+      const setupStatus = await ekka.setup.status();
+      setState((s) => ({ ...s, setupStatus }));
+
+      // Log setup gate status
+      console.log(`[ekka] op=desktop.setup.gate setupComplete=${setupStatus.setupComplete}`);
+
+      // HARD GATE: If setup is incomplete, show wizard - NO exceptions
+      if (!setupStatus.setupComplete) {
+        setState((s) => ({ ...s, appState: 'setup' }));
+        return;
+      }
+
+      // Step 2: Connect to engine (REQUIRED before login)
       await ekka.connect();
       setState((s) => ({ ...s, connected: true }));
+
+      console.log('[ekka] op=desktop.connect.success');
 
       addAuditEvent({
         type: 'connection.established',
@@ -61,6 +82,7 @@ export function DemoApp(): ReactElement {
         technical: { mode: advanced.internal.mode() },
       });
 
+      // Step 3: Check auth
       if (!ekka.auth.isLoggedIn()) {
         setState((s) => ({ ...s, appState: 'login' }));
         return;
@@ -75,6 +97,21 @@ export function DemoApp(): ReactElement {
       await checkHomeStatus();
     } catch (err: unknown) {
       const message = err instanceof EkkaError ? err.message : 'Connection failed';
+
+      // Check if setup is incomplete - if so, stay in setup mode
+      try {
+        const setupStatus = await ekka.setup.status();
+        if (!setupStatus.setupComplete) {
+          setState((s) => ({ ...s, setupStatus, appState: 'setup', error: message }));
+          return;
+        }
+      } catch {
+        // If we can't check setup status, stay in loading with error
+        setState((s) => ({ ...s, error: message }));
+        return;
+      }
+
+      // Only go to login if setup IS complete but connection failed
       setState((s) => ({ ...s, error: message, appState: 'login' }));
 
       addAuditEvent({
@@ -103,7 +140,47 @@ export function DemoApp(): ReactElement {
     }
   }
 
+  async function handleSetupComplete(): Promise<void> {
+    // After setup wizard completes:
+    // Wizard already verified credentials saved - proceed directly to login
+    // (Don't re-verify via setup.status - keychain read-after-write has race condition)
+    setState((s) => ({ ...s, appState: 'loading' }));
+
+    try {
+      // Ensure connected (wizard should have called connect, but verify)
+      if (!ekka.isConnected()) {
+        await ekka.connect();
+        console.log('[ekka] op=desktop.connect.success (post-setup)');
+      }
+      setState((s) => ({ ...s, connected: true }));
+
+      // Now proceed to login
+      if (!ekka.auth.isLoggedIn()) {
+        setState((s) => ({ ...s, appState: 'login' }));
+        return;
+      }
+
+      // Already logged in - check home status
+      await checkHomeStatus();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Setup verification failed';
+      setState((s) => ({ ...s, error: message, appState: 'setup' }));
+    }
+  }
+
   async function handleLoginSuccess(): Promise<void> {
+    // Belt + suspenders: ensure connected before any engine ops
+    if (!state.connected) {
+      try {
+        await ekka.connect();
+        setState((s) => ({ ...s, connected: true }));
+        console.log('[ekka] op=desktop.connect.success (post-login)');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to connect';
+        setState((s) => ({ ...s, error: message }));
+        return;
+      }
+    }
     await checkHomeStatus();
   }
 
@@ -124,6 +201,17 @@ export function DemoApp(): ReactElement {
       fontSize: '14px',
     };
     return <div style={style}>Connecting...</div>;
+  }
+
+  // Setup wizard (pre-login)
+  if (state.appState === 'setup' && state.setupStatus) {
+    return (
+      <SetupWizard
+        initialStatus={state.setupStatus}
+        onComplete={handleSetupComplete}
+        darkMode={darkMode}
+      />
+    );
   }
 
   // Login

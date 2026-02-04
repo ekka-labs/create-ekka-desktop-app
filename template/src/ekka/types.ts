@@ -28,6 +28,7 @@ export interface EngineErrorDetail {
   code: string;
   message: string;
   details?: unknown;
+  status?: number;
 }
 
 /**

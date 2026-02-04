@@ -31,6 +31,9 @@
       "../branding/icon.icns",
       "icons/icon.png"
     ],
+    "resources": [
+      "resources/ekka-engine-bootstrap"
+    ],
     "macOS": {
       "minimumSystemVersion": "10.15"
     }

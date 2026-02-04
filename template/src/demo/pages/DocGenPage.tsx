@@ -6,8 +6,12 @@
  */
 
 import { useState, useEffect, useRef, type CSSProperties, type ReactElement } from 'react';
-import { createWorkflowRun, getWorkflowRun, type WorkflowRun, type DebugBundleInfo } from '../../ekka/api/engine';
-import { getAccessToken } from '../../ekka/auth/storage';
+import {
+  createWorkflowRun,
+  getWorkflowRun,
+  type WorkflowRun,
+  type DebugBundleInfo,
+} from '../../ekka/ops/workflowRuns';
 import * as debugOps from '../../ekka/ops/debug';
 
 interface DocGenPageProps {
@@ -326,26 +330,21 @@ export function DocGenPage({ darkMode }: DocGenPageProps): ReactElement {
     setWorkflowRun(null);
 
     try {
-      // Get JWT from auth
-      const jwt = getAccessToken();
-
       // Create workflow run - DO NOT log the input
-      const response = await createWorkflowRun(
-        {
-          type: 'wf_prompt_run',
-          confidentiality: 'confidential',
-          context: {
-            prompt_ref: PROMPT_CONFIG,
-            variables: { input: selectedFolder },
-          },
+      // JWT is handled internally by the ops layer
+      const response = await createWorkflowRun({
+        type: 'wf_prompt_run',
+        confidentiality: 'confidential',
+        context: {
+          prompt_ref: PROMPT_CONFIG,
+          variables: { input: selectedFolder },
         },
-        jwt
-      );
+      });
 
       setWorkflowRunId(response.id);
 
       // Start polling
-      startPolling(response.id, jwt);
+      startPolling(response.id);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to start generation';
       setError(message);
@@ -354,10 +353,11 @@ export function DocGenPage({ darkMode }: DocGenPageProps): ReactElement {
   };
 
   // Poll for status updates
-  const startPolling = (id: string, jwt: string | null) => {
+  const startPolling = (id: string) => {
     const poll = async () => {
       try {
-        const run = await getWorkflowRun(id, jwt);
+        // JWT is handled internally by the ops layer
+        const run = await getWorkflowRun(id);
         setWorkflowRun(run);
 
         // Update status based on workflow state

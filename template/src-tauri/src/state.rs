@@ -2,7 +2,9 @@
 //!
 //! Contains the shared state accessible across Tauri commands.
 
+use crate::engine_process::{EngineProcess, EngineStatus};
 use crate::node_auth::{NodeIdentity, NodeSessionHolder};
+use crate::node_credentials::NodeAuthTokenHolder;
 use chrono::{DateTime, Utc};
 use ekka_sdk_core::ekka_ops::{
     self as ops, EkkaError, EkkaResult, GrantIssuer, GrantRequest, GrantResponse, RuntimeContext,
@@ -35,6 +37,106 @@ pub enum HomeState {
     BootstrapPreLogin,
     AuthenticatedNoHomeGrant,
     HomeGranted,
+}
+
+// =============================================================================
+// Node Auth State (single-flight guard)
+// =============================================================================
+
+/// Node authentication state - prevents concurrent/repeated auth attempts
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeAuthState {
+    /// No auth attempted yet
+    Unauthenticated,
+    /// Auth in progress (single-flight lock)
+    Authenticating,
+    /// Auth succeeded, token stored
+    Authenticated,
+    /// Auth failed, do not retry this session
+    Failed,
+}
+
+impl Default for NodeAuthState {
+    fn default() -> Self {
+        Self::Unauthenticated
+    }
+}
+
+/// Thread-safe holder for node auth state
+pub struct NodeAuthStateHolder {
+    state: RwLock<NodeAuthState>,
+    last_error: RwLock<Option<String>>,
+}
+
+impl NodeAuthStateHolder {
+    pub fn new() -> Self {
+        Self {
+            state: RwLock::new(NodeAuthState::Unauthenticated),
+            last_error: RwLock::new(None),
+        }
+    }
+
+    /// Get current state
+    pub fn get(&self) -> NodeAuthState {
+        self.state.read().map(|g| *g).unwrap_or(NodeAuthState::Unauthenticated)
+    }
+
+    /// Try to start auth - returns true if allowed, false if already in progress or failed
+    pub fn try_start(&self) -> bool {
+        if let Ok(mut guard) = self.state.write() {
+            match *guard {
+                NodeAuthState::Unauthenticated => {
+                    *guard = NodeAuthState::Authenticating;
+                    true
+                }
+                _ => false, // Already authenticating, authenticated, or failed
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Mark auth as successful
+    pub fn set_authenticated(&self) {
+        if let Ok(mut guard) = self.state.write() {
+            *guard = NodeAuthState::Authenticated;
+        }
+        if let Ok(mut guard) = self.last_error.write() {
+            *guard = None;
+        }
+    }
+
+    /// Mark auth as failed
+    pub fn set_failed(&self, error: String) {
+        if let Ok(mut guard) = self.state.write() {
+            *guard = NodeAuthState::Failed;
+        }
+        if let Ok(mut guard) = self.last_error.write() {
+            *guard = Some(error);
+        }
+    }
+
+    /// Get last error if failed
+    pub fn get_last_error(&self) -> Option<String> {
+        self.last_error.read().ok().and_then(|g| g.clone())
+    }
+
+    /// Reset to unauthenticated (e.g., on logout or credential change)
+    #[allow(dead_code)]
+    pub fn reset(&self) {
+        if let Ok(mut guard) = self.state.write() {
+            *guard = NodeAuthState::Unauthenticated;
+        }
+        if let Ok(mut guard) = self.last_error.write() {
+            *guard = None;
+        }
+    }
+}
+
+impl Default for NodeAuthStateHolder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 // =============================================================================
@@ -216,6 +318,12 @@ pub struct EngineState {
     pub node_identity: Mutex<Option<NodeIdentity>>,
     /// Node session holder (in-memory only, never persisted)
     pub node_session: Arc<NodeSessionHolder>,
+    /// Node auth token holder (in-memory only, role=node JWT)
+    pub node_auth_token: Arc<NodeAuthTokenHolder>,
+    /// Node auth state (single-flight guard to prevent retry storms)
+    pub node_auth_state: Arc<NodeAuthStateHolder>,
+    /// External engine process (Phase 3A)
+    pub engine_process: Option<Arc<EngineProcess>>,
 }
 
 impl Default for EngineState {
@@ -229,7 +337,98 @@ impl Default for EngineState {
             runner_state: RunnerState::new(),
             node_identity: Mutex::new(None),
             node_session: Arc::new(NodeSessionHolder::new()),
+            node_auth_token: Arc::new(NodeAuthTokenHolder::new()),
+            node_auth_state: Arc::new(NodeAuthStateHolder::new()),
+            engine_process: None,
         }
+    }
+}
+
+impl EngineState {
+    /// Create EngineState with an engine process holder
+    pub fn with_engine(engine: Arc<EngineProcess>) -> Self {
+        Self {
+            connected: Mutex::new(false),
+            auth: Mutex::new(None),
+            home_path: Mutex::new(None),
+            node_id: Mutex::new(None),
+            vault_cache: VaultCache::new(),
+            runner_state: RunnerState::new(),
+            node_identity: Mutex::new(None),
+            node_session: Arc::new(NodeSessionHolder::new()),
+            node_auth_token: Arc::new(NodeAuthTokenHolder::new()),
+            node_auth_state: Arc::new(NodeAuthStateHolder::new()),
+            engine_process: Some(engine),
+        }
+    }
+
+    /// Get the node auth token if available and valid
+    pub fn get_node_auth_token(&self) -> Option<crate::node_credentials::NodeAuthToken> {
+        self.node_auth_token.get_valid()
+    }
+
+    /// Check if external engine is available
+    pub fn is_engine_available(&self) -> bool {
+        self.engine_process
+            .as_ref()
+            .map(|e| e.is_available())
+            .unwrap_or(false)
+    }
+
+    /// Permanently disable engine routing for this session (one-way switch)
+    pub fn disable_engine(&self) {
+        if let Some(engine) = &self.engine_process {
+            engine.disable();
+        }
+    }
+
+    /// Get engine status (read-only diagnostics)
+    pub fn get_engine_status(&self) -> EngineStatus {
+        self.engine_process
+            .as_ref()
+            .map(|e| e.get_status())
+            .unwrap_or(EngineStatus {
+                installed: false,
+                running: false,
+                available: false,
+                pid: None,
+                version: None,
+                build: None,
+            })
+    }
+
+    /// Create a RuntimeContext from current state
+    pub fn to_runtime_context(&self) -> Option<RuntimeContext> {
+        let home_path = self.home_path.lock().ok()?.clone()?;
+        let node_id = self.node_id.lock().ok()?.clone()?;
+
+        let mut ctx = RuntimeContext::new(home_path, node_id);
+
+        if let Ok(guard) = self.auth.lock() {
+            if let Some(auth) = guard.as_ref() {
+                ctx.set_auth(ops::AuthContext::new(
+                    &auth.tenant_id,
+                    &auth.sub,
+                    &auth.jwt,
+                ));
+            }
+        }
+
+        Some(ctx)
+    }
+
+    /// Get a reference to the vault cache
+    ///
+    /// Used by vault handlers to pass the cache to ekka_ops functions.
+    pub fn vault_cache(&self) -> &dyn VaultManagerCache {
+        &self.vault_cache
+    }
+
+    /// Clear the vault cache
+    ///
+    /// Should be called on logout or auth context changes.
+    pub fn clear_vault_cache(&self) {
+        self.vault_cache.clear();
     }
 }
 
@@ -283,42 +482,6 @@ impl VaultManagerCache for VaultCache {
         if let Ok(mut guard) = self.inner.write() {
             guard.clear();
         }
-    }
-}
-
-impl EngineState {
-    /// Create a RuntimeContext from current state
-    pub fn to_runtime_context(&self) -> Option<RuntimeContext> {
-        let home_path = self.home_path.lock().ok()?.clone()?;
-        let node_id = self.node_id.lock().ok()?.clone()?;
-
-        let mut ctx = RuntimeContext::new(home_path, node_id);
-
-        if let Ok(guard) = self.auth.lock() {
-            if let Some(auth) = guard.as_ref() {
-                ctx.set_auth(ops::AuthContext::new(
-                    &auth.tenant_id,
-                    &auth.sub,
-                    &auth.jwt,
-                ));
-            }
-        }
-
-        Some(ctx)
-    }
-
-    /// Get a reference to the vault cache
-    ///
-    /// Used by vault handlers to pass the cache to ekka_ops functions.
-    pub fn vault_cache(&self) -> &dyn VaultManagerCache {
-        &self.vault_cache
-    }
-
-    /// Clear the vault cache
-    ///
-    /// Should be called on logout or auth context changes.
-    pub fn clear_vault_cache(&self) {
-        self.vault_cache.clear();
     }
 }
 

@@ -2,18 +2,14 @@
  * Auth API Client
  *
  * Handles authentication requests to the EKKA API.
- * Uses security envelope headers via the http module.
+ * All HTTP proxied through Rust via engine_request.
  */
 
-import { apiRequest, ApiRequestError } from '../api/http';
-import { AUTH_ENDPOINTS } from '../config';
+import { OPS } from '../constants';
+import { _internal, makeRequest } from '../internal';
 import type {
-  LoginRequest,
   LoginResponse,
-  RefreshRequest,
   RefreshResponse,
-  LogoutRequest,
-  LogoutResponse,
   AuthTokens,
   UserInfo,
 } from './types';
@@ -27,6 +23,21 @@ import {
   clearUser,
 } from './storage';
 
+/**
+ * API request error with status code and error details.
+ */
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(message: string, status: number, code: string) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
 // =============================================================================
 // PUBLIC API
 // =============================================================================
@@ -38,17 +49,23 @@ import {
  * @throws ApiRequestError on authentication failure
  */
 export async function login(identifier: string, password: string): Promise<LoginResponse> {
-  const body: LoginRequest = { identifier, password };
+  const req = makeRequest(OPS.AUTH_LOGIN, {
+    identifier,
+    password,
+  });
 
-  const response = await apiRequest<LoginResponse>(
-    AUTH_ENDPOINTS.login,
-    {
-      method: 'POST',
-      module: 'auth',
-      action: 'login',
-      body,
-    }
-  );
+  const engineResponse = await _internal.request(req);
+
+  if (!engineResponse.ok) {
+    const error = engineResponse.error;
+    throw new ApiRequestError(
+      error?.message || 'Login failed',
+      error?.status || 401,
+      error?.code || 'AUTH_ERROR'
+    );
+  }
+
+  const response = engineResponse.result as LoginResponse;
 
   // Store tokens and user
   setTokens({
@@ -77,19 +94,24 @@ export async function refresh(): Promise<AuthTokens> {
     throw new Error('No refresh token available');
   }
 
-  const body: RefreshRequest = { refresh_token: refreshToken };
+  const req = makeRequest(OPS.AUTH_REFRESH, {
+    refresh_token: refreshToken,
+    jwt: getAccessToken(), // Include current access token if available
+  });
 
   try {
-    const response = await apiRequest<RefreshResponse>(
-      AUTH_ENDPOINTS.refresh,
-      {
-        method: 'POST',
-        module: 'auth',
-        action: 'refresh_token',
-        body,
-      },
-      getAccessToken() // Include current access token if available
-    );
+    const engineResponse = await _internal.request(req);
+
+    if (!engineResponse.ok) {
+      const error = engineResponse.error;
+      throw new ApiRequestError(
+        error?.message || 'Token refresh failed',
+        error?.status || 401,
+        error?.code || 'AUTH_ERROR'
+      );
+    }
+
+    const response = engineResponse.result as RefreshResponse;
 
     // Store new tokens
     setTokens({
@@ -123,16 +145,10 @@ export async function logout(): Promise<void> {
   // Attempt to notify server (best effort)
   if (refreshToken) {
     try {
-      const body: LogoutRequest = { refresh_token: refreshToken };
-      await apiRequest<LogoutResponse>(
-        AUTH_ENDPOINTS.logout,
-        {
-          method: 'POST',
-          module: 'auth',
-          action: 'logout',
-          body,
-        }
-      );
+      const req = makeRequest(OPS.AUTH_LOGOUT, {
+        refresh_token: refreshToken,
+      });
+      await _internal.request(req);
     } catch {
       // Ignore server errors during logout
     }
@@ -193,5 +209,4 @@ function notifyAuthChange(isAuthenticated: boolean): void {
 // RE-EXPORTS
 // =============================================================================
 
-export { ApiRequestError };
 export type { UserInfo, AuthTokens } from './types';

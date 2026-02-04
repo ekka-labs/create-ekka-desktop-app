@@ -7,92 +7,20 @@
  * - By subtype breakdown
  * - Recent tasks table
  *
- * Polls /engine/runner-tasks/stats every 2 seconds while tab is open.
+ * Polls runner.taskStats() every 2 seconds while tab is open.
+ * Stats are fetched via Rust proxy (no direct TS HTTP).
  */
 
 import { useState, useEffect, useRef, type CSSProperties, type ReactElement } from 'react';
-import { ENGINE_BASE_URL, CLIENT_TYPE, CLIENT_VERSION } from '../../ekka/config';
-import { getAccessToken } from '../../ekka/auth/storage';
-
-// =============================================================================
-// TYPES
-// =============================================================================
-
-interface RunnerTaskStats {
-  counts: {
-    pending: number;
-    claimed: number;
-    completed_5m: number;
-    failed_5m: number;
-  };
-  by_subtype: Record<string, { pending: number; claimed: number }>;
-  recent: Array<{
-    task_id: string;
-    task_subtype: string | null;
-    status: string;
-    runner_id: string | null;
-    created_at: string;
-    claimed_at: string | null;
-    lease_expires_at: string | null;
-  }>;
-  active_runners: Array<{
-    runner_id: string;
-    last_claimed_at: string;
-  }>;
-}
+import { advanced, type RunnerTaskStats } from '../../ekka';
 
 interface RunnerPageProps {
   darkMode: boolean;
 }
 
-// =============================================================================
-// API
-// =============================================================================
-
-function buildHeaders(jwt: string | null): Record<string, string> {
-  const correlationId = crypto.randomUUID();
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-REQUEST-ID': correlationId,
-    'X-EKKA-CORRELATION-ID': correlationId,
-    'X-EKKA-PROOF-TYPE': jwt ? 'jwt' : 'none',
-    'X-EKKA-MODULE': 'engine.runner_tasks',
-    'X-EKKA-ACTION': 'stats',
-    'X-EKKA-CLIENT': CLIENT_TYPE,
-    'X-EKKA-CLIENT-VERSION': CLIENT_VERSION,
-  };
-  if (jwt) {
-    headers['Authorization'] = `Bearer ${jwt}`;
-  }
-  return headers;
-}
-
-interface FetchError extends Error {
-  status?: number;
-  statusText?: string;
-  errorData?: unknown;
-}
-
+// Fetch stats via Rust proxy (no direct HTTP from TS)
 async function fetchStats(): Promise<RunnerTaskStats> {
-  const jwt = getAccessToken();
-  const url = `${ENGINE_BASE_URL}/engine/runner-tasks/stats`;
-  const headers = buildHeaders(jwt);
-
-  // eslint-disable-next-line no-restricted-globals -- Direct engine API call for runner stats
-  const response = await fetch(url, { method: 'GET', headers });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const error: FetchError = new Error(
-      errorData.message || errorData.error || `HTTP ${response.status}: ${response.statusText}`
-    );
-    error.status = response.status;
-    error.statusText = response.statusText;
-    error.errorData = errorData;
-    throw error;
-  }
-
-  return response.json();
+  return advanced.runner.taskStats();
 }
 
 // =============================================================================
@@ -288,12 +216,12 @@ export function RunnerPage({ darkMode }: RunnerPageProps): ReactElement {
       setLastUpdated(new Date());
       setError(null);
     } catch (err) {
-      const fetchError = err as FetchError;
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load stats';
       setError({
-        message: fetchError.message || 'Failed to load stats',
-        status: fetchError.status,
-        statusText: fetchError.statusText,
-        data: fetchError.errorData,
+        message: errorMessage,
+        status: undefined,
+        statusText: undefined,
+        data: undefined,
       });
     }
   };

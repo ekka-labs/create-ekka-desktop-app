@@ -53,7 +53,7 @@ pub fn handle_grant(state: &EngineState) -> EngineResponse {
         },
     };
 
-    // 3. Load marker to get node_id
+    // 3. Load marker to get instance_id (used as node_id in grants)
     let marker_path = home_path.join(".ekka-marker.json");
     let marker_content = match std::fs::read_to_string(&marker_path) {
         Ok(c) => c,
@@ -75,9 +75,9 @@ pub fn handle_grant(state: &EngineState) -> EngineResponse {
         }
     };
 
-    let node_id = match marker.get("node_id").and_then(|v| v.as_str()) {
+    let node_id = match marker.get("instance_id").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
-        None => return EngineResponse::err("MARKER_INVALID", "Marker missing node_id"),
+        None => return EngineResponse::err("MARKER_INVALID", "Marker missing instance_id"),
     };
 
     // 4. Get engine URL

@@ -113,6 +113,18 @@ export class DemoBackend implements Backend {
       }
 
       // -----------------------------------------------------------------------
+      // Setup (pre-login) - only checks node credentials
+      // Home folder grant is post-login
+      // -----------------------------------------------------------------------
+      case OPS.SETUP_STATUS: {
+        // In demo mode, node credentials are never configured
+        return ok({
+          nodeIdentity: 'not_configured',
+          setupComplete: false,
+        });
+      }
+
+      // -----------------------------------------------------------------------
       // Unknown
       // -----------------------------------------------------------------------
       default:

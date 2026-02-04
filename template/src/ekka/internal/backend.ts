@@ -88,9 +88,36 @@ class SmartBackend {
    * Send a request to the backend.
    */
   async request(req: EngineRequest): Promise<EngineResponse> {
+    // LOCAL-ONLY OPERATIONS: Always route to Tauri, never to demo backend
+    // These are desktop-specific operations that must be handled by Rust handlers
+    const localOnlyOps = [
+      'setup.status',
+      'nodeCredentials.set',
+      'nodeCredentials.status',
+      'nodeCredentials.clear',
+    ];
+
+    const isLocalOnlyOp = localOnlyOps.includes(req.op);
+
+    // Local-only ops ALWAYS go to Tauri - regardless of connection state or mode
+    // This ensures setup operations never accidentally route to demo backend
+    if (isLocalOnlyOp) {
+      console.log(`[ts.op.dispatch] op=${req.op} backend=tauri (local-only)`);
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        return await invoke<EngineResponse>('engine_request', { req });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'Tauri not available';
+        console.error(`[ts.op.dispatch] op=${req.op} backend=tauri FAILED: ${message}`);
+        return err('TAURI_NOT_READY', message);
+      }
+    }
+
     if (!this.connected) {
       return err('NOT_CONNECTED', 'Not connected. Call ekka.connect() first.');
     }
+
+    console.log(`[ts.op.dispatch] op=${req.op} backend=${this.mode} connected=${this.connected}`);
 
     if (this.mode === 'engine') {
       try {

@@ -83,29 +83,15 @@ export default defineConfig([
   },
 
   // ========================================
-  // SPECIAL RULES FOR USER CODE (outside src/ekka)
-  // Ban direct fetch() calls - must use ekka client
+  // EKKA GUARDRAILS - NO FETCH() ANYWHERE
+  // ALL HTTP must go through Tauri/Rust via engine_request
   // ========================================
   {
-    files: ['src/app/**/*.{ts,tsx}', 'src/demo/**/*.{ts,tsx}'],
+    files: ['src/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-globals': ['error',
         { name: 'process', message: 'EKKA: TS MUST NOT access process.env. Config is managed by EKKA.' },
-        { name: 'fetch', message: 'EKKA: Direct fetch() is forbidden. Use import { ekka } from "@ekka" instead.' },
-      ],
-    },
-  },
-
-  // ========================================
-  // src/ekka/** - PLUMBING ZONE
-  // fetch() is ALLOWED here (and ONLY here)
-  // ========================================
-  {
-    files: ['src/ekka/**/*.{ts,tsx}'],
-    rules: {
-      // fetch is allowed in ekka client
-      'no-restricted-globals': ['error',
-        { name: 'process', message: 'EKKA: TS MUST NOT access process.env. Config is managed by EKKA.' },
+        { name: 'fetch', message: 'EKKA: Direct fetch() is FORBIDDEN. All HTTP must go through Tauri via engine_request. See RULEBOOK_ARCHITECTURE_AI.md.' },
       ],
     },
   },
