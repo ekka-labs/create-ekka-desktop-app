@@ -19,6 +19,7 @@ mod node_runner;
 mod node_vault_crypto;
 mod node_vault_store;
 mod ops;
+mod security_epoch;
 mod state;
 mod types;
 
@@ -31,7 +32,8 @@ use tauri::Manager;
 
 fn main() {
     // Load .env.local for development (before anything else)
-    // This provides EKKA_SECURITY_EPOCH and other dev-time overrides.
+    // This provides optional dev-time overrides (EKKA_SECURITY_EPOCH, etc).
+    // Note: EKKA_SECURITY_EPOCH is optional - epoch is resolved from marker file by default.
     // Note: ENGINE_GRANT_VERIFY_KEY_B64 is now fetched from /.well-known/ekka-configuration
     if let Err(_) = dotenvy::from_filename(".env.local") {
         // Also try parent directory (when running from src-tauri)
@@ -62,14 +64,6 @@ fn main() {
         .setup(move |app| {
             // Attempt to spawn engine process
             tracing::info!(op = "desktop.startup", "EKKA Desktop starting");
-
-            // Log security epoch status (still needed for home bootstrap)
-            let security_epoch_set = std::env::var("EKKA_SECURITY_EPOCH").is_ok();
-            tracing::info!(
-                op = "desktop.required_env.loaded",
-                EKKA_SECURITY_EPOCH = security_epoch_set,
-                "Security epoch env var status"
-            );
 
             // Log build-time baked engine URL presence (not the URL itself)
             let engine_url_baked = option_env!("EKKA_ENGINE_URL").is_some();

@@ -16,6 +16,7 @@ use crate::node_vault_store::{
     delete_node_secret, has_node_secret, read_node_secret, write_node_secret,
     SECRET_ID_NODE_CREDENTIALS,
 };
+use crate::security_epoch::resolve_security_epoch;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
@@ -134,17 +135,6 @@ impl std::fmt::Display for CredentialsError {
 
 impl std::error::Error for CredentialsError {}
 
-// =============================================================================
-// Helper: Get epoch for vault operations
-// =============================================================================
-
-/// Get the security epoch from environment
-fn get_security_epoch() -> u32 {
-    std::env::var("EKKA_SECURITY_EPOCH")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1)
-}
 
 // =============================================================================
 // Core Functions
@@ -170,7 +160,7 @@ pub fn store_credentials(node_id: &Uuid, node_secret: &str) -> Result<(), Creden
     // Initialize home if needed
     let bootstrap = initialize_home().map_err(|e| CredentialsError::VaultError(e))?;
     let home = bootstrap.home_path();
-    let epoch = get_security_epoch();
+    let epoch = resolve_security_epoch(home);
 
     // Store node_id + node_secret as JSON
     let creds = NodeCredentials {
@@ -202,7 +192,7 @@ pub fn store_credentials(node_id: &Uuid, node_secret: &str) -> Result<(), Creden
 /// * `Err(CredentialsError)` if not found or invalid
 pub fn load_credentials() -> Result<(Uuid, String), CredentialsError> {
     let home = resolve_home_path().map_err(|e| CredentialsError::VaultError(e))?;
-    let epoch = get_security_epoch();
+    let epoch = resolve_security_epoch(&home);
 
     // Key derivation uses device_secret + epoch only (not node_id)
     let plaintext = read_node_secret(&home, epoch, SECRET_ID_NODE_CREDENTIALS)
