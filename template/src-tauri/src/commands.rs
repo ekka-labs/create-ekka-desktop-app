@@ -455,9 +455,10 @@ fn handle_node_credentials_clear() -> EngineResponse {
 fn handle_runner_task_stats(state: &EngineState) -> EngineResponse {
     use crate::state::NodeAuthState;
 
-    // Get engine URL (needed for both auth and stats request)
-    let engine_url = std::env::var("EKKA_ENGINE_URL")
-        .unwrap_or_else(|_| "https://api.ekka.ai".to_string());
+    // Get engine URL (baked at build time)
+    let engine_url = option_env!("EKKA_ENGINE_URL")
+        .unwrap_or("https://api.ekka.ai")
+        .to_string();
 
     // Get node auth token for Authorization header
     let node_token = match state.get_node_auth_token() {
@@ -819,8 +820,9 @@ fn handle_bootstrap_node_session(payload: &Value, state: &EngineState) -> Engine
     if start_runner {
         // Build runner config from node auth token
         let runner_config = node_auth::NodeSessionRunnerConfig {
-            engine_url: std::env::var("EKKA_ENGINE_URL")
-                .or_else(|_| std::env::var("ENGINE_URL"))
+            engine_url: option_env!("EKKA_ENGINE_URL")
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("ENGINE_URL").ok())
                 .unwrap_or_default(),
             node_url: std::env::var("NODE_URL").unwrap_or_else(|_| "http://127.0.0.1:7777".to_string()),
             session_token: node_token.token.clone(),
@@ -913,8 +915,9 @@ fn build_security_headers(jwt: Option<&str>, module: &str, action: &str) -> Vec<
 
 /// Create a workflow run (POST /engine/workflow-runs)
 fn handle_workflow_runs_create(payload: &Value) -> EngineResponse {
-    let engine_url = std::env::var("EKKA_ENGINE_URL")
-        .unwrap_or_else(|_| "http://localhost:3200".to_string());
+    let engine_url = option_env!("EKKA_ENGINE_URL")
+        .unwrap_or("http://localhost:3200")
+        .to_string();
 
     // Extract request body
     let request = match payload.get("request") {
@@ -974,8 +977,9 @@ fn handle_workflow_runs_create(payload: &Value) -> EngineResponse {
 
 /// Get a workflow run (GET /engine/workflow-runs/{id})
 fn handle_workflow_runs_get(payload: &Value) -> EngineResponse {
-    let engine_url = std::env::var("EKKA_ENGINE_URL")
-        .unwrap_or_else(|_| "http://localhost:3200".to_string());
+    let engine_url = option_env!("EKKA_ENGINE_URL")
+        .unwrap_or("http://localhost:3200")
+        .to_string();
 
     // Extract workflow run ID
     let id = match payload.get("id").and_then(|v| v.as_str()) {

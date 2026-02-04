@@ -80,13 +80,13 @@ pub fn handle_grant(state: &EngineState) -> EngineResponse {
         None => return EngineResponse::err("MARKER_INVALID", "Marker missing instance_id"),
     };
 
-    // 4. Get engine URL
-    let engine_url = match std::env::var("EKKA_ENGINE_URL") {
-        Ok(u) => u,
-        Err(_) => {
+    // 4. Get engine URL (baked at build time)
+    let engine_url = match option_env!("EKKA_ENGINE_URL") {
+        Some(u) => u,
+        None => {
             return EngineResponse::err(
                 "ENGINE_NOT_CONFIGURED",
-                "EKKA_ENGINE_URL not set. HOME grant requires online engine.",
+                "EKKA_ENGINE_URL not baked at build time. Rebuild with EKKA_ENGINE_URL set.",
             )
         }
     };

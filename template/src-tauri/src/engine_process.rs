@@ -46,9 +46,9 @@ fn build_engine_env() -> Result<Vec<(&'static str, String)>, &'static str> {
     // EKKA_RUNNER_MODE=engine (always set)
     env.push(("EKKA_RUNNER_MODE", "engine".to_string()));
 
-    // EKKA_ENGINE_URL - pass through from process env or use default
-    if let Ok(url) = std::env::var("EKKA_ENGINE_URL") {
-        env.push(("EKKA_ENGINE_URL", url));
+    // EKKA_ENGINE_URL - baked at build time
+    if let Some(url) = option_env!("EKKA_ENGINE_URL") {
+        env.push(("EKKA_ENGINE_URL", url.to_string()));
     }
 
     // EKKA_INTERNAL_SERVICE_KEY - required for engine mode

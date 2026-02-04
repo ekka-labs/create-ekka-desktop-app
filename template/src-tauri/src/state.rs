@@ -179,7 +179,7 @@ impl Default for RunnerStatus {
             enabled: false,
             state: RunnerLoopState::Stopped,
             runner_id: None,
-            engine_url: std::env::var("EKKA_ENGINE_URL").ok(),
+            engine_url: option_env!("EKKA_ENGINE_URL").map(|s| s.to_string()),
             last_poll_at: None,
             last_claim_at: None,
             last_complete_at: None,
@@ -259,9 +259,10 @@ impl RunnerState {
             s.enabled = true;
             s.state = RunnerLoopState::Running;
             s.runner_id = Some(runner_id.to_string());
-            s.engine_url = std::env::var("EKKA_ENGINE_URL")
-                .or_else(|_| std::env::var("ENGINE_URL"))
-                .ok();
+            // EKKA_ENGINE_URL baked at build time, ENGINE_URL as runtime fallback
+            s.engine_url = option_env!("EKKA_ENGINE_URL")
+                .map(|s| s.to_string())
+                .or_else(|| std::env::var("ENGINE_URL").ok());
             s.last_error = None;
         });
     }
@@ -511,11 +512,11 @@ impl GrantIssuer for EngineHttpGrantIssuer {
             EkkaError::new(ops::codes::NOT_AUTHENTICATED, "Must login before requesting grant")
         })?;
 
-        // Get engine URL
-        let engine_url = std::env::var("EKKA_ENGINE_URL").map_err(|_| {
+        // Get engine URL (baked at build time)
+        let engine_url = option_env!("EKKA_ENGINE_URL").ok_or_else(|| {
             EkkaError::new(
                 ops::codes::ENGINE_ERROR,
-                "EKKA_ENGINE_URL not set. Grant requires online engine.",
+                "EKKA_ENGINE_URL not baked at build time. Rebuild with EKKA_ENGINE_URL set.",
             )
         })?;
 
@@ -613,10 +614,10 @@ impl GrantIssuer for EngineHttpGrantIssuer {
             EkkaError::new(ops::codes::NOT_AUTHENTICATED, "Must login to revoke grant")
         })?;
 
-        // Get engine URL (optional - revoke is best effort)
-        let engine_url = match std::env::var("EKKA_ENGINE_URL") {
-            Ok(url) => url,
-            Err(_) => return Ok(()), // No engine, just return success
+        // Get engine URL (baked at build time, optional - revoke is best effort)
+        let engine_url = match option_env!("EKKA_ENGINE_URL") {
+            Some(url) => url,
+            None => return Ok(()), // No engine baked, just return success
         };
 
         // Make revoke request (best effort)

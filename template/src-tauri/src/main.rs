@@ -74,6 +74,14 @@ fn main() {
                 "Required security env vars"
             );
 
+            // Log build-time baked engine URL presence (not the URL itself)
+            let engine_url_baked = option_env!("EKKA_ENGINE_URL").is_some();
+            tracing::info!(
+                op = "desktop.engine_url.baked",
+                present = engine_url_baked,
+                "EKKA_ENGINE_URL baked at build time"
+            );
+
             // Check for stored node credentials (vault-backed)
             let has_creds = node_credentials::has_credentials();
 
@@ -112,13 +120,14 @@ fn main() {
                 }
 
                 // Authenticate node with server before spawning engine
-                let engine_url = match std::env::var("EKKA_ENGINE_URL") {
-                    Ok(url) => url,
-                    Err(_) => {
+                // EKKA_ENGINE_URL is baked at build time via build.rs
+                let engine_url = match option_env!("EKKA_ENGINE_URL") {
+                    Some(url) => url.to_string(),
+                    None => {
                         tracing::warn!(
                             op = "desktop.engine.start.blocked",
                             reason = "missing_engine_url",
-                            "Engine start blocked - EKKA_ENGINE_URL not set"
+                            "Engine start blocked - EKKA_ENGINE_URL not baked at build time"
                         );
                         return;
                     }

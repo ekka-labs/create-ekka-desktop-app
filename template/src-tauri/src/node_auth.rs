@@ -770,9 +770,11 @@ pub struct NodeSessionRunnerConfig {
 
 impl NodeSessionRunnerConfig {
     pub fn from_session(session: &NodeSession, node_id: Uuid) -> Result<Self, String> {
-        let engine_url = std::env::var("ENGINE_URL")
-            .or_else(|_| std::env::var("EKKA_ENGINE_URL"))
-            .map_err(|_| "ENGINE_URL or EKKA_ENGINE_URL required")?;
+        // EKKA_ENGINE_URL baked at build time, ENGINE_URL as runtime fallback
+        let engine_url = option_env!("EKKA_ENGINE_URL")
+            .map(|s| s.to_string())
+            .or_else(|| std::env::var("ENGINE_URL").ok())
+            .ok_or("EKKA_ENGINE_URL not baked at build time and ENGINE_URL not set")?;
 
         let node_url = std::env::var("NODE_URL").unwrap_or_else(|_| "http://127.0.0.1:7777".to_string());
 
