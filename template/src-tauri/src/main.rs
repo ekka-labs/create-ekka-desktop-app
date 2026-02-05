@@ -198,8 +198,8 @@ fn engine_disconnect(state: State<EngineState>) {
 fn engine_request(req: EngineRequest, state: State<EngineState>) -> EngineResponse {
     let home_path_str = state.home_path.display().to_string();
 
-    // Check connected (except for status operations)
-    if !matches!(req.op.as_str(), "runtime.info" | "home.status") {
+    // Check connected (except for status operations that run pre-connect)
+    if !matches!(req.op.as_str(), "runtime.info" | "home.status" | "setup.status" | "nodeCredentials.status") {
         let connected = match state.connected.lock() {
             Ok(guard) => *guard,
             Err(e) => return EngineResponse::err("INTERNAL_ERROR", &e.to_string()),
