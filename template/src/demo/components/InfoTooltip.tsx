@@ -1,9 +1,10 @@
 /**
  * Info Tooltip Component
  * Shows an info icon that displays tooltip text on hover.
+ * Uses position: fixed to avoid being clipped by parent overflow.
  */
 
-import { useState, type CSSProperties, type ReactElement } from 'react';
+import { useState, useRef, type CSSProperties, type ReactElement } from 'react';
 
 interface InfoTooltipProps {
   text: string;
@@ -12,6 +13,8 @@ interface InfoTooltipProps {
 
 export function InfoTooltip({ text, darkMode = false }: InfoTooltipProps): ReactElement {
   const [isVisible, setIsVisible] = useState(false);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const iconRef = useRef<HTMLSpanElement>(null);
 
   const colors = {
     icon: darkMode ? '#98989d' : '#86868b',
@@ -19,6 +22,14 @@ export function InfoTooltip({ text, darkMode = false }: InfoTooltipProps): React
     tooltipBg: darkMode ? '#3a3a3c' : '#1d1d1f',
     tooltipText: '#ffffff',
   };
+
+  function handleEnter() {
+    if (iconRef.current) {
+      const rect = iconRef.current.getBoundingClientRect();
+      setPos({ top: rect.top - 8, left: rect.left + rect.width / 2 });
+    }
+    setIsVisible(true);
+  }
 
   const styles: Record<string, CSSProperties> = {
     container: {
@@ -34,11 +45,10 @@ export function InfoTooltip({ text, darkMode = false }: InfoTooltipProps): React
       transition: 'color 0.15s ease',
     },
     tooltip: {
-      position: 'absolute',
-      bottom: '100%',
-      left: '50%',
-      transform: 'translateX(-50%)',
-      marginBottom: '8px',
+      position: 'fixed',
+      top: pos.top,
+      left: pos.left,
+      transform: 'translate(-50%, -100%)',
       padding: '8px 12px',
       background: colors.tooltipBg,
       color: colors.tooltipText,
@@ -48,18 +58,20 @@ export function InfoTooltip({ text, darkMode = false }: InfoTooltipProps): React
       whiteSpace: 'normal',
       maxWidth: '320px',
       width: 'max-content',
-      zIndex: 1000,
+      zIndex: 10000,
       opacity: isVisible ? 1 : 0,
       visibility: isVisible ? 'visible' : 'hidden',
       transition: 'opacity 0.15s ease, visibility 0.15s ease',
       pointerEvents: 'none',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
     },
   };
 
   return (
     <span
+      ref={iconRef}
       style={styles.container}
-      onMouseEnter={() => setIsVisible(true)}
+      onMouseEnter={handleEnter}
       onMouseLeave={() => setIsVisible(false)}
     >
       <svg style={styles.icon} viewBox="0 0 16 16" fill="none">
