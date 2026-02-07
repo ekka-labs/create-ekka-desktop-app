@@ -13,6 +13,7 @@
 
 import { useState, useEffect, useRef, type CSSProperties, type ReactElement } from 'react';
 import { advanced, type RunnerTaskStats } from '../../ekka';
+import { InfoTooltip } from '../components';
 
 interface RunnerPageProps {
   darkMode: boolean;
@@ -247,7 +248,7 @@ export function RunnerPage({ darkMode }: RunnerPageProps): ReactElement {
   return (
     <div style={styles.container}>
       <div style={styles.header}>
-        <h1 style={styles.title}>Runner</h1>
+        <h1 style={styles.title}>Runner <InfoTooltip text="The runner executes tasks assigned to this node. It polls the engine for work, sends heartbeats, and reports results. Tasks run in a sandboxed context with only the permissions granted to this node." darkMode={darkMode} /></h1>
         <div style={styles.subtitle}>
           <span>Task queue observability</span>
           <span style={styles.refreshBadge}>Auto-refresh: 2s</span>
@@ -311,7 +312,7 @@ export function RunnerPage({ darkMode }: RunnerPageProps): ReactElement {
           <div style={styles.grid}>
             {/* Active Runners */}
             <div style={styles.card}>
-              <div style={styles.cardTitle}>Active Runners</div>
+              <div style={styles.cardTitle}>Active Runners <InfoTooltip text="Number of runner loops currently polling for and executing tasks on this node." darkMode={darkMode} /></div>
               {stats.active_runners.length === 0 ? (
                 <div style={styles.noRunners}>
                   No active runners detected (last 10m)
@@ -334,7 +335,7 @@ export function RunnerPage({ darkMode }: RunnerPageProps): ReactElement {
 
             {/* Queue Counts */}
             <div style={styles.card}>
-              <div style={styles.cardTitle}>Queue Counts</div>
+              <div style={styles.cardTitle}>Queue Counts <InfoTooltip text="Pending: waiting for a runner. Claimed: in progress. Completed/Failed: finished tasks in the last 5 minutes." darkMode={darkMode} /></div>
               <div style={styles.countGrid}>
                 <div style={styles.countItem}>
                   <div style={{ ...styles.countValue, color: stats.counts.pending > 0 ? colors.yellow : colors.textMuted }}>
@@ -395,7 +396,7 @@ export function RunnerPage({ darkMode }: RunnerPageProps): ReactElement {
 
           {/* Recent Tasks */}
           <div style={styles.card}>
-            <div style={styles.cardTitle}>Recent Tasks (25)</div>
+            <div style={styles.cardTitle}>Recent Tasks (25) <InfoTooltip text="Last 25 tasks processed by this node, newest first. Each shows type, status, and timing." darkMode={darkMode} /></div>
             {stats.recent.length === 0 ? (
               <div style={{ color: colors.textMuted, fontSize: '13px' }}>No tasks found</div>
             ) : (

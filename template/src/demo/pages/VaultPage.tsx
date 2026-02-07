@@ -9,7 +9,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef, type CSSProperties, type ReactElement } from 'react';
 import { ekka, type SecretMeta, type SecretType, type BundleMeta, type FileEntry, type AuditEvent } from '../../ekka';
-import { EmptyState } from '../components/EmptyState';
+import { EmptyState, InfoTooltip } from '../components';
 import { Banner } from '../components/Banner';
 
 // =============================================================================
@@ -213,7 +213,7 @@ export function VaultPage({ darkMode }: VaultPageProps): ReactElement {
   return (
     <div style={styles.container}>
       <header style={styles.header}>
-        <h1 style={styles.title}>Vault</h1>
+        <h1 style={styles.title}>Vault <InfoTooltip text="Encrypted-at-rest secret storage, local to this node. Secrets never leave the device unencrypted. Organize with bundles and folders; every access is audited." darkMode={darkMode} /></h1>
         <p style={styles.subtitle}>Securely manage secrets, organize them into bundles and folders, and track all access.</p>
       </header>
 

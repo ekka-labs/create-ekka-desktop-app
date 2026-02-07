@@ -8,6 +8,7 @@
 import { useState, useEffect, useCallback, type CSSProperties, type ReactElement } from 'react';
 import { ekka, advanced, type PathInfo, type PathType, type PathAccess, type PathGrantResult } from '../../ekka';
 import { InfoPopover } from '../components/InfoPopover';
+import { InfoTooltip } from '../components';
 
 interface PathPermissionsPageProps {
   darkMode: boolean;
@@ -516,7 +517,7 @@ export function PathPermissionsPage({ darkMode }: PathPermissionsPageProps): Rea
   return (
     <div style={styles.container}>
       <header style={styles.header}>
-        <h1 style={styles.title}>Path Permissions</h1>
+        <h1 style={styles.title}>Path Permissions <InfoTooltip text="Every folder your app accesses requires an explicit, engine-signed grant. Grants follow least-privilege: scoped to one path, one user, with an expiration. No grant = no access." darkMode={darkMode} /></h1>
         <p style={styles.subtitle}>
           EKKA requires explicit permission to access any path outside your home directory.
           When you approve, EKKA requests an engine-signed grant that unlocks access.
@@ -528,7 +529,7 @@ export function PathPermissionsPage({ darkMode }: PathPermissionsPageProps): Rea
       {/* Section A: Path Selector */}
       <div style={styles.section}>
         <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>Select Path</span>
+          <span style={styles.sectionTitle}>Select Path <InfoTooltip text="Choose a folder to check whether a valid grant exists. The check is local — no data leaves your machine." darkMode={darkMode} /></span>
           <div style={styles.sectionLine} />
         </div>
         <div style={styles.card}>
@@ -578,7 +579,7 @@ export function PathPermissionsPage({ darkMode }: PathPermissionsPageProps): Rea
       {selectedPath && permissionStatus && (
         <div style={styles.section}>
           <div style={styles.sectionHeader}>
-            <span style={styles.sectionTitle}>Permission Status</span>
+            <span style={styles.sectionTitle}>Permission Status <InfoTooltip text="Shows whether the selected path has a valid, cryptographically signed grant from the engine." darkMode={darkMode} /></span>
             <div style={styles.sectionLine} />
           </div>
           <div
@@ -743,7 +744,7 @@ export function PathPermissionsPage({ darkMode }: PathPermissionsPageProps): Rea
       {/* Section E: Current Permissions Table */}
       <div style={styles.section}>
         <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>Current Permissions</span>
+          <span style={styles.sectionTitle}>Current Permissions <InfoTooltip text="All active grants for this node. Each grant is Ed25519-signed by the engine, scoped to a specific path, user, and tenant, with a fixed expiration." darkMode={darkMode} /></span>
           <div style={styles.sectionLine} />
         </div>
         <div style={{ ...styles.card, padding: 0, overflowX: 'auto' }}>

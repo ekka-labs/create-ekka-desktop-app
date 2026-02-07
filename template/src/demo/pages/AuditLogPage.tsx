@@ -7,7 +7,7 @@ import { type CSSProperties, type ReactElement } from 'react';
 import { clearAuditEvents, type AuditEvent } from '../../ekka/audit';
 import { formatLocalTime, formatRelativeTime } from '../../ekka/utils';
 import { useAuditEvents } from '../hooks/useAuditEvents';
-import { EmptyState } from '../components/EmptyState';
+import { EmptyState, InfoTooltip } from '../components';
 import { LearnMore } from '../components/LearnMore';
 
 interface AuditLogPageProps {
@@ -193,7 +193,7 @@ export function AuditLogPage({ darkMode }: AuditLogPageProps): ReactElement {
     <div>
       <header style={styles.header}>
         <div style={styles.headerText}>
-          <h1 style={styles.title}>Audit Log</h1>
+          <h1 style={styles.title}>Audit Log <InfoTooltip text="Append-only log of security-relevant events on this node. Every grant check, secret access, auth event, and runner action is recorded with actor, decision, and correlation ID." darkMode={darkMode} /></h1>
           <p style={styles.description}>
             Track system events and operations for debugging and compliance.
           </p>
