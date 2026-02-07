@@ -1,19 +1,17 @@
-//! Tauri commands
+//! Bridge commands
 //!
 //! Entry points for TypeScript → Rust communication.
 
 use crate::bootstrap::initialize_home;
-use crate::config;
-use crate::engine_process;
 use crate::grants::require_home_granted;
 use crate::handlers;
 use crate::node_auth;
 use crate::node_credentials;
-use crate::ops::{auth, runtime};
+use crate::ops::auth;
 use crate::state::EngineState;
 use crate::types::{EngineRequest, EngineResponse};
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 /// Initialize the SDK and store in state
 #[tauri::command]
@@ -32,17 +30,10 @@ pub fn engine_connect(state: State<EngineState>) -> Result<(), String> {
         *hp = Some(bootstrap.home_path().to_path_buf());
     }
 
-    // Store instance_id from marker (used as node_id for grants)
-    let marker_path = bootstrap.home_path().join(".ekka-marker.json");
-    if let Ok(content) = std::fs::read_to_string(&marker_path) {
-        if let Ok(marker) = serde_json::from_str::<Value>(&content) {
-            if let Some(instance_id_str) = marker.get("instance_id").and_then(|v| v.as_str()) {
-                if let Ok(instance_id) = uuid::Uuid::parse_str(instance_id_str) {
-                    if let Ok(mut nid) = state.node_id.lock() {
-                        *nid = Some(instance_id);
-                    }
-                }
-            }
+    // Store real node_id from vault credentials (NOT instance_id from marker)
+    if let Ok((vault_node_id, _)) = node_credentials::load_credentials() {
+        if let Ok(mut nid) = state.node_id.lock() {
+            *nid = Some(vault_node_id);
         }
     }
 
@@ -64,39 +55,14 @@ pub fn engine_disconnect(state: State<EngineState>) {
     }
 }
 
-/// Main RPC dispatcher - routes all operations to handlers
+/// Main RPC dispatcher - routes all operations to local handlers
 ///
-/// ═══════════════════════════════════════════════════════════════════════════════════════════
-/// DRIFT GUARD - ARCHITECTURE FREEZE
-/// ═══════════════════════════════════════════════════════════════════════════════════════════
-/// DO NOT extend this without revisiting the Desktop–Engine architecture decision.
-///
-/// The routing switch below (engine vs stub) is FROZEN as of Phase 3G.
-/// Engine routing is one-way: once disabled for a session, it stays disabled.
-/// The stub path handles all operations locally via SDK handlers.
-///
-/// Any changes to routing logic require explicit architecture review.
-/// ═══════════════════════════════════════════════════════════════════════════════════════════
+/// All commands require node identity (resolved at startup).
+/// Operations go to local handlers + cloud API.
+/// The spawned engine is a runner runtime (for task execution), NOT a request router.
 #[tauri::command]
-pub fn engine_request(req: EngineRequest, state: State<EngineState>) -> EngineResponse {
-    // LOCAL-ONLY OPERATIONS: Never route to engine
-    // These are desktop-specific operations that must be handled locally
-    let local_only = matches!(
-        req.op.as_str(),
-        "setup.status" | "nodeCredentials.set" | "nodeCredentials.status" | "nodeCredentials.clear"
-    );
-
-    // ROUTING SWITCH: If real engine is available and not local-only, route to it
-    if !local_only && state.is_engine_available() {
-        if let Some(response) = engine_process::route_to_engine(&req) {
-            return response;
-        }
-        // Engine failed - permanently disable for this session
-        state.disable_engine();
-        tracing::warn!(op = "engine.disabled.session", "Engine routing disabled for session, using stub");
-    }
-
-    // STUB PATH: Handle locally via SDK handlers
+pub fn engine_request(req: EngineRequest, state: State<EngineState>, app_handle: AppHandle) -> EngineResponse {
+    // HANDLER DISPATCH: Handle operations locally or proxy to remote API
 
     // Check connected (except for status operations and setup)
     if !matches!(req.op.as_str(), "runtime.info" | "home.status" | "vault.status" | "setup.status" | "nodeCredentials.set" | "nodeCredentials.status" | "nodeCredentials.clear") {
@@ -121,18 +87,45 @@ pub fn engine_request(req: EngineRequest, state: State<EngineState>) -> EngineRe
         // Auth
         "auth.set" => auth::handle_set(&req.payload, &state),
 
-        // Node Credentials (keychain-stored node_id + node_secret)
-        "nodeCredentials.set" => handle_node_credentials_set(&req.payload),
-        "nodeCredentials.status" => handle_node_credentials_status(&state),
-        "nodeCredentials.clear" => handle_node_credentials_clear(),
+        // Node Credentials (routed to Desktop Core process via JSON-RPC)
+        // After successful set, app restarts to run full startup with credentials
+        "nodeCredentials.set" => handle_node_credentials_set_via_core(&req.payload, &state, app_handle),
+        "nodeCredentials.status" => state.core_process.request("nodeCredentials.status", &req.payload),
+        "nodeCredentials.clear" => state.core_process.request("nodeCredentials.clear", &req.payload),
 
         // Node Session Authentication
         "nodeSession.ensureIdentity" => handle_ensure_node_identity(&state),
         "nodeSession.bootstrap" => handle_bootstrap_node_session(&req.payload, &state),
         "nodeSession.status" => handle_node_session_status(&state),
 
-        // Home (use new SDK handlers)
-        "home.status" => handlers::home::handle_status(&state),
+        // Home status (host probes via SDK, core formats response)
+        "home.status" => {
+            use ekka_sdk_core::ekka_ops::home;
+            let payload = match state.to_runtime_context() {
+                Some(ctx) => {
+                    let status = home::status(&ctx);
+                    serde_json::json!({
+                        "state": status.state,
+                        "homePath": status.home_path,
+                        "grantPresent": status.grant_present,
+                        "reason": status.reason,
+                    })
+                }
+                None => {
+                    let home_path = state.home_path.lock().ok()
+                        .and_then(|p| p.clone())
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    serde_json::json!({
+                        "state": "BOOTSTRAP_PRE_LOGIN",
+                        "homePath": home_path,
+                        "grantPresent": false,
+                        "reason": null,
+                    })
+                }
+            };
+            state.core_process.request("home.status", &payload)
+        }
         "home.grant" => handlers::home::handle_grant(&state),
 
         // Paths (new SDK operations)
@@ -142,56 +135,28 @@ pub fn engine_request(req: EngineRequest, state: State<EngineState>) -> EngineRe
         "paths.request" => handlers::paths::handle_request(&req.payload, &state),
         "paths.remove" => handlers::paths::handle_remove(&req.payload, &state),
 
-        // Runtime
-        "runtime.info" => runtime::handle_info(&state),
+        // Runtime (host probes home state, core formats response)
+        "runtime.info" => {
+            let (home_state, home_path, _, _) = crate::grants::get_home_status(&state);
+            state.core_process.request("runtime.info", &serde_json::json!({
+                "homeState": home_state,
+                "homePath": home_path.to_string_lossy(),
+            }))
+        }
 
-        // Runner status (local runner loop status)
+        // Runner status (local runner loop status, formatted by Desktop Core)
         "runner.status" => {
             let status = state.runner_state.get();
-            EngineResponse::ok(serde_json::json!(status))
+            state.core_process.request("runner.status", &serde_json::json!(status))
         }
 
-        // Runner task stats (proxied from engine API)
-        "runner.taskStats" => handle_runner_task_stats(&state),
-
-        // Workflow Runs (proxied from engine API)
-        "workflowRuns.create" => handle_workflow_runs_create(&req.payload),
-        "workflowRuns.get" => handle_workflow_runs_get(&req.payload),
+        // Runner task stats (routed to Desktop Core → engine API)
+        "runner.taskStats" => state.core_process.request("runner.taskStats", &req.payload),
 
         // Auth (proxied from API)
-        "auth.login" => handle_auth_login(&req.payload),
-        "auth.refresh" => handle_auth_refresh(&req.payload),
-        "auth.logout" => handle_auth_logout(&req.payload),
-
-        // Engine status (read-only diagnostics)
-        "engine.status" => {
-            let status = state.get_engine_status();
-            EngineResponse::ok(serde_json::json!(status))
-        }
-
-        // Database (require HOME_GRANTED)
-        "db.get" | "db.put" | "db.delete" => {
-            if let Err(e) = require_home_granted(&state) {
-                return e;
-            }
-            EngineResponse::err("NOT_IMPLEMENTED", &format!("{} not yet implemented", req.op))
-        }
-
-        // Queue (require HOME_GRANTED)
-        "queue.enqueue" | "queue.claim" | "queue.ack" | "queue.nack" | "queue.heartbeat" => {
-            if let Err(e) = require_home_granted(&state) {
-                return e;
-            }
-            EngineResponse::err("NOT_IMPLEMENTED", &format!("{} not yet implemented", req.op))
-        }
-
-        // Pipeline (require HOME_GRANTED)
-        "pipeline.submit" | "pipeline.events" => {
-            if let Err(e) = require_home_granted(&state) {
-                return e;
-            }
-            EngineResponse::err("NOT_IMPLEMENTED", &format!("{} not yet implemented", req.op))
-        }
+        "auth.login" => state.core_process.request("auth.login", &req.payload),
+        "auth.refresh" => state.core_process.request("auth.refresh", &req.payload),
+        "auth.logout" => state.core_process.request("auth.logout", &req.payload),
 
         // Vault - Status/Capabilities (require HOME_GRANTED)
         "vault.status" => {
@@ -317,21 +282,6 @@ pub fn engine_request(req: EngineRequest, state: State<EngineState>) -> EngineRe
             handlers::vault::handle_audit_list(&req.payload, &state)
         }
 
-        // Legacy vault operations (deprecated)
-        "vault.init" | "vault.isInitialized" | "vault.install" | "vault.listBundles"
-        | "vault.showPolicy" | "vault.folders.list" | "vault.folders.get"
-        | "vault.folders.create" | "vault.folders.rename" | "vault.folders.delete" => {
-            if let Err(e) = require_home_granted(&state) {
-                return e;
-            }
-            EngineResponse::err("DEPRECATED", &format!("{} is deprecated, use vault.* API instead", req.op))
-        }
-
-        // Debug utilities (dev mode only)
-        "debug.isDevMode" => handle_is_dev_mode(),
-        "debug.openFolder" => handle_open_folder(&req.payload, &state),
-        "debug.resolveVaultPath" => handle_resolve_vault_path(&req.payload, &state),
-
         // Unknown
         _ => EngineResponse::err("INVALID_OP", &format!("Unknown operation: {}", req.op)),
     }
@@ -349,390 +299,53 @@ pub fn engine_request(req: EngineRequest, state: State<EngineState>) -> EngineRe
 ///
 /// This is called before login to determine if setup wizard is needed.
 /// Home folder grant is handled post-login via HomeSetupPage.
-fn handle_setup_status(_state: &EngineState) -> EngineResponse {
-    tracing::info!(op = "rust.local.op", opName = "setup.status", "Handling setup.status locally");
-
-    // Check node identity status (credentials in vault)
-    let node_configured = node_credentials::has_credentials();
-
-    // Setup is complete when node credentials are configured
-    // Home folder grant is handled post-login, not here
-    let setup_complete = node_configured;
-
-    tracing::info!(
-        op = "desktop.setup.status",
-        node_configured = node_configured,
-        setup_complete = setup_complete,
-        "Setup status checked"
-    );
-
-    EngineResponse::ok(serde_json::json!({
-        "nodeIdentity": if node_configured { "configured" } else { "not_configured" },
-        "setupComplete": setup_complete
-    }))
+fn handle_setup_status(state: &EngineState) -> EngineResponse {
+    state.core_process.request("setup.status", &serde_json::json!({}))
 }
 
 // =============================================================================
 // Node Credentials Handlers
 // =============================================================================
 
-/// Set node credentials (store in OS keychain)
+/// Set node credentials via Desktop Core process, then restart app
 ///
-/// Accepts node_id (UUID) and node_secret (string).
-/// Validates both before storing.
-fn handle_node_credentials_set(payload: &Value) -> EngineResponse {
-    tracing::info!(op = "rust.local.op", opName = "nodeCredentials.set", "Handling nodeCredentials.set locally");
+/// Core handles validation and encrypted storage.
+/// Host handles the app restart (Bridge-specific).
+fn handle_node_credentials_set_via_core(payload: &Value, state: &EngineState, app_handle: AppHandle) -> EngineResponse {
+    tracing::info!(op = "rust.local.op", opName = "nodeCredentials.set", "Routing nodeCredentials.set to Desktop Core");
 
-    // Extract node_id
-    let node_id_str = match payload.get("nodeId").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return EngineResponse::err("INVALID_PAYLOAD", "nodeId is required"),
-    };
+    let resp = state.core_process.request("nodeCredentials.set", payload);
 
-    // Validate node_id format
-    let node_id = match node_credentials::validate_node_id(node_id_str) {
-        Ok(id) => id,
-        Err(e) => return EngineResponse::err("INVALID_NODE_ID", &e.to_string()),
-    };
-
-    // Extract node_secret
-    let node_secret = match payload.get("nodeSecret").and_then(|v| v.as_str()) {
-        Some(secret) => secret,
-        None => return EngineResponse::err("INVALID_PAYLOAD", "nodeSecret is required"),
-    };
-
-    // Validate node_secret
-    if let Err(e) = node_credentials::validate_node_secret(node_secret) {
-        return EngineResponse::err("INVALID_NODE_SECRET", &e.to_string());
+    if resp.ok {
+        tracing::info!(
+            op = "desktop.onboarding.complete",
+            "Credentials stored via Core - restarting app for full startup"
+        );
+        // Restart app to run full startup with credentials
+        // This triggers: updater check → node auth → engine spawn
+        app_handle.restart();
     }
 
-    // Store credentials
-    match node_credentials::store_credentials(&node_id, node_secret) {
-        Ok(()) => EngineResponse::ok(serde_json::json!({
-            "ok": true,
-            "nodeId": node_id.to_string()
-        })),
-        Err(e) => EngineResponse::err("CREDENTIALS_STORE_ERROR", &e.to_string()),
-    }
-}
-
-/// Get node credentials status (has credentials + node_id + auth status)
-fn handle_node_credentials_status(state: &EngineState) -> EngineResponse {
-    tracing::info!(op = "rust.local.op", opName = "nodeCredentials.status", "Handling nodeCredentials.status locally");
-    let status = node_credentials::get_status();
-    let auth_token = state.get_node_auth_token();
-
-    EngineResponse::ok(serde_json::json!({
-        "hasCredentials": status.has_credentials,
-        "nodeId": status.node_id,
-        "isAuthenticated": auth_token.is_some(),
-        "authSession": auth_token.map(|t| serde_json::json!({
-            "sessionId": t.session_id.to_string(),
-            "tenantId": t.tenant_id.to_string(),
-            "workspaceId": t.workspace_id.to_string(),
-            "expiresAt": t.expires_at.to_rfc3339()
-        }))
-    }))
-}
-
-/// Clear node credentials from OS keychain
-fn handle_node_credentials_clear() -> EngineResponse {
-    tracing::info!(op = "rust.local.op", opName = "nodeCredentials.clear", "Handling nodeCredentials.clear locally");
-    match node_credentials::clear_credentials() {
-        Ok(()) => EngineResponse::ok(serde_json::json!({
-            "ok": true
-        })),
-        Err(e) => EngineResponse::err("CREDENTIALS_CLEAR_ERROR", &e.to_string()),
-    }
-}
-
-// =============================================================================
-// Runner Task Stats (Proxied HTTP)
-// =============================================================================
-
-/// Fetch runner task stats from engine API.
-/// Proxies GET /engine/runner-tasks/stats through Rust to avoid CORS.
-/// Auto-authenticates from keychain if token is missing (single-flight, no retry on failure).
-fn handle_runner_task_stats(state: &EngineState) -> EngineResponse {
-    use crate::state::NodeAuthState;
-
-    // Get engine URL (baked at build time)
-    let engine_url = option_env!("EKKA_ENGINE_URL")
-        .unwrap_or("https://api.ekka.ai")
-        .to_string();
-
-    // Get node auth token for Authorization header
-    let node_token = match state.get_node_auth_token() {
-        Some(token) => token,
-        None => {
-            // Check auth state - don't retry if already failed
-            let auth_state = state.node_auth_state.get();
-            if auth_state == NodeAuthState::Failed {
-                let error = state.node_auth_state.get_last_error()
-                    .unwrap_or_else(|| "Authentication previously failed".to_string());
-                return EngineResponse::err("NOT_AUTHENTICATED", &error);
-            }
-            if auth_state == NodeAuthState::Authenticating {
-                return EngineResponse::err("NOT_AUTHENTICATED", "Authentication in progress");
-            }
-            if auth_state == NodeAuthState::Authenticated {
-                // Token should exist but doesn't - inconsistent state
-                return EngineResponse::err("NOT_AUTHENTICATED", "Token expired, restart app");
-            }
-
-            // Token missing - try auto-auth from keychain (single-flight)
-            if !node_credentials::has_credentials() {
-                return EngineResponse::err(
-                    "NOT_AUTHENTICATED",
-                    "Node not authenticated. Complete setup first.",
-                );
-            }
-
-            // Try to acquire single-flight lock
-            if !state.node_auth_state.try_start() {
-                return EngineResponse::err("NOT_AUTHENTICATED", "Authentication in progress");
-            }
-
-            // Attempt auto-auth (single attempt, no retry)
-            tracing::info!(
-                op = "desktop.node.auth.attempt",
-                reason = "runner.taskStats",
-                "Authenticating node from keychain"
-            );
-
-            match node_credentials::authenticate_node(&engine_url) {
-                Ok(token) => {
-                    // Store token and mark authenticated
-                    state.node_auth_token.set(token.clone());
-                    state.node_auth_state.set_authenticated();
-                    token
-                }
-                Err(e) => {
-                    let error_msg = format!("Node authentication failed: {}", e);
-                    tracing::warn!(
-                        op = "desktop.node.auth.failed",
-                        error = %e,
-                        "Node authentication failed - will not retry"
-                    );
-                    state.node_auth_state.set_failed(error_msg.clone());
-                    return EngineResponse::err("NOT_AUTHENTICATED", &error_msg);
-                }
-            }
-        }
-    };
-
-    // Build HTTP client
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return EngineResponse::err("HTTP_CLIENT_ERROR", &e.to_string()),
-    };
-
-    let request_id = uuid::Uuid::new_v4().to_string();
-
-    // Make request with security envelope headers
-    let response = client
-        .get(format!("{}/engine/runner-tasks/stats", engine_url))
-        .header("Content-Type", "application/json")
-        .header("Authorization", format!("Bearer {}", node_token.token))
-        .header("X-EKKA-PROOF-TYPE", "jwt")
-        .header("X-REQUEST-ID", &request_id)
-        .header("X-EKKA-CORRELATION-ID", &request_id)
-        .header("X-EKKA-MODULE", "engine.runner_tasks")
-        .header("X-EKKA-ACTION", "stats")
-        .header("X-EKKA-CLIENT", config::app_slug())
-        .header("X-EKKA-CLIENT-VERSION", "0.2.0")
-        .send();
-
-    match response {
-        Ok(resp) => {
-            let status = resp.status();
-            if status.is_success() {
-                match resp.json::<serde_json::Value>() {
-                    Ok(data) => EngineResponse::ok(data),
-                    Err(e) => EngineResponse::err("PARSE_ERROR", &e.to_string()),
-                }
-            } else {
-                let status_code = status.as_u16();
-                let body = resp.text().unwrap_or_default();
-                EngineResponse::err(
-                    "HTTP_ERROR",
-                    &format!("HTTP {}: {}", status_code, body),
-                )
-            }
-        }
-        Err(e) => EngineResponse::err("REQUEST_FAILED", &e.to_string()),
-    }
-}
-
-// =============================================================================
-// Debug Handlers
-// =============================================================================
-
-/// Check if running in development mode (EKKA_ENV=development)
-fn handle_is_dev_mode() -> EngineResponse {
-    let is_dev = std::env::var("EKKA_ENV")
-        .map(|v| v == "development")
-        .unwrap_or(false);
-
-    EngineResponse::ok(serde_json::json!({ "isDevMode": is_dev }))
-}
-
-/// Open a folder in the system file browser
-fn handle_open_folder(payload: &Value, state: &EngineState) -> EngineResponse {
-    // Only allow in dev mode
-    let is_dev = std::env::var("EKKA_ENV")
-        .map(|v| v == "development")
-        .unwrap_or(false);
-
-    if !is_dev {
-        return EngineResponse::err("DEV_MODE_ONLY", "debug.openFolder is only available in development mode");
-    }
-
-    let path = match payload.get("path").and_then(|v| v.as_str()) {
-        Some(p) => p,
-        None => return EngineResponse::err("INVALID_PAYLOAD", "path is required"),
-    };
-
-    // If path starts with vault://, resolve it to filesystem path
-    let resolved_path = if path.starts_with("vault://") {
-        // Get home path
-        let home_path = match state.home_path.lock() {
-            Ok(guard) => match guard.as_ref() {
-                Some(p) => p.clone(),
-                None => return EngineResponse::err("NOT_CONNECTED", "Home path not initialized"),
-            },
-            Err(e) => return EngineResponse::err("INTERNAL_ERROR", &e.to_string()),
-        };
-
-        // vault://tmp/... -> {EKKA_HOME}/vault/tmp/...
-        let vault_path = path.strip_prefix("vault://").unwrap_or(path);
-        home_path.join("vault").join(vault_path)
-    } else {
-        std::path::PathBuf::from(path)
-    };
-
-    // Check if path exists
-    if !resolved_path.exists() {
-        return EngineResponse::err("PATH_NOT_FOUND", &format!("Path does not exist: {}", resolved_path.display()));
-    }
-
-    // Open folder using system default
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&resolved_path)
-            .spawn()
-            .map_err(|e| e.to_string())
-            .ok();
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(&resolved_path)
-            .spawn()
-            .map_err(|e| e.to_string())
-            .ok();
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&resolved_path)
-            .spawn()
-            .map_err(|e| e.to_string())
-            .ok();
-    }
-
-    EngineResponse::ok(serde_json::json!({
-        "ok": true,
-        "path": resolved_path.display().to_string()
-    }))
-}
-
-/// Resolve a vault:// path to filesystem path (dev mode only)
-fn handle_resolve_vault_path(payload: &Value, state: &EngineState) -> EngineResponse {
-    // Only allow in dev mode
-    let is_dev = std::env::var("EKKA_ENV")
-        .map(|v| v == "development")
-        .unwrap_or(false);
-
-    if !is_dev {
-        return EngineResponse::err("DEV_MODE_ONLY", "debug.resolveVaultPath is only available in development mode");
-    }
-
-    let vault_uri = match payload.get("path").and_then(|v| v.as_str()) {
-        Some(p) => p,
-        None => return EngineResponse::err("INVALID_PAYLOAD", "path is required"),
-    };
-
-    if !vault_uri.starts_with("vault://") {
-        return EngineResponse::err("INVALID_PATH", "Path must start with vault://");
-    }
-
-    // Get home path
-    let home_path = match state.home_path.lock() {
-        Ok(guard) => match guard.as_ref() {
-            Some(p) => p.clone(),
-            None => return EngineResponse::err("NOT_CONNECTED", "Home path not initialized"),
-        },
-        Err(e) => return EngineResponse::err("INTERNAL_ERROR", &e.to_string()),
-    };
-
-    // vault://tmp/... -> {EKKA_HOME}/vault/tmp/...
-    let vault_path = vault_uri.strip_prefix("vault://").unwrap_or(vault_uri);
-    let resolved_path = home_path.join("vault").join(vault_path);
-
-    EngineResponse::ok(serde_json::json!({
-        "vaultUri": vault_uri,
-        "filesystemPath": resolved_path.display().to_string(),
-        "exists": resolved_path.exists()
-    }))
+    resp
 }
 
 // =============================================================================
 // Node Session Handlers
 // =============================================================================
 
-/// Ensure node identity exists
-///
-/// Returns node identity from node auth token (obtained at startup via node_secret auth).
-/// Does NOT use Ed25519 keypair generation.
+/// Ensure node identity exists (host probes token state, core formats response + checks credentials)
 fn handle_ensure_node_identity(state: &EngineState) -> EngineResponse {
-    // Use node auth token if available (from startup auth)
-    if let Some(node_token) = state.get_node_auth_token() {
-        tracing::info!(
-            op = "node_identity.from_token",
-            node_id = %node_token.node_id,
-            "Node identity from auth token"
-        );
-        return EngineResponse::ok(serde_json::json!({
-            "ok": true,
-            "node_id": node_token.node_id.to_string(),
-            "tenant_id": node_token.tenant_id.to_string(),
-            "workspace_id": node_token.workspace_id.to_string(),
-            "auth_method": "node_secret"
-        }));
-    }
+    let node_token = state.get_node_auth_token();
+    let has_token = node_token.is_some();
 
-    // No node auth token - check for credentials
-    let creds_status = node_credentials::get_status();
-    if creds_status.has_credentials {
-        // Credentials exist but auth failed or not attempted
-        return EngineResponse::err(
-            "NODE_NOT_AUTHENTICATED",
-            "Node credentials exist but not authenticated. Restart app to authenticate.",
-        );
-    }
+    let payload = serde_json::json!({
+        "hasToken": has_token,
+        "nodeId": node_token.as_ref().map(|t| t.node_id.to_string()),
+        "tenantId": node_token.as_ref().map(|t| t.tenant_id.to_string()),
+        "workspaceId": node_token.as_ref().map(|t| t.workspace_id.to_string()),
+    });
 
-    // No credentials configured
-    EngineResponse::err(
-        "NODE_CREDENTIALS_MISSING",
-        "Node credentials not configured. Use nodeCredentials.set to configure.",
-    )
+    state.core_process.request("nodeSession.ensureIdentity", &payload)
 }
 
 /// Bootstrap node session using node_id + node_secret auth
@@ -775,23 +388,7 @@ fn handle_bootstrap_node_session(payload: &Value, state: &EngineState) -> Engine
             token
         }
         None => {
-            // Token missing - try auto-auth from vault (single-flight)
-            // Check prerequisites BEFORE acquiring lock
-            if !node_credentials::has_credentials() {
-                tracing::error!(
-                    op = "node_session.no_credentials",
-                    "Node credentials not configured"
-                );
-                return EngineResponse::err(
-                    "NODE_CREDENTIALS_MISSING",
-                    "Node credentials not configured. Complete setup first.",
-                );
-            }
-
-            // Get engine URL from baked config (same source as everywhere else)
-            let engine_url = config::engine_url();
-
-            // Now acquire single-flight lock (after all prerequisite checks)
+            // Token missing - auto-auth via Desktop Core (single-flight)
             if !state.node_auth_state.try_start() {
                 return EngineResponse::err("NODE_AUTH_IN_PROGRESS", "Authentication in progress, please wait");
             }
@@ -799,30 +396,61 @@ fn handle_bootstrap_node_session(payload: &Value, state: &EngineState) -> Engine
             // From here, ALL paths must call set_authenticated() or set_failed()
             tracing::info!(
                 op = "node_session.auto_auth",
-                "Auto-authenticating node after setup"
+                "Auto-authenticating node via Desktop Core"
             );
 
-            match node_credentials::authenticate_node(engine_url) {
-                Ok(token) => {
+            let response = state.core_process.request(
+                "node.auth.authenticate",
+                &serde_json::json!({}),
+            );
+
+            if response.ok {
+                if let Some(ref result) = response.result {
+                    let token = node_credentials::NodeAuthToken {
+                        token: result.get("token").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        node_id: result.get("nodeId").and_then(|v| v.as_str())
+                            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                            .unwrap_or(node_id),
+                        tenant_id: result.get("tenantId").and_then(|v| v.as_str())
+                            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                            .unwrap_or_default(),
+                        workspace_id: result.get("workspaceId").and_then(|v| v.as_str())
+                            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                            .unwrap_or_default(),
+                        session_id: result.get("sessionId").and_then(|v| v.as_str())
+                            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                            .unwrap_or_default(),
+                        expires_at: result.get("expiresAt").and_then(|v| v.as_str())
+                            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                            .unwrap_or_else(chrono::Utc::now),
+                    };
+
                     state.node_auth_token.set(token.clone());
                     state.node_auth_state.set_authenticated();
                     tracing::info!(
                         op = "node_session.auto_auth_success",
                         node_id = %token.node_id,
-                        "Node auto-authenticated successfully"
+                        "Node auto-authenticated via Desktop Core"
                     );
                     token
-                }
-                Err(e) => {
-                    let error_msg = format!("Node authentication failed: {}", e);
-                    tracing::error!(
-                        op = "node_session.auto_auth_failed",
-                        error = %e,
-                        "Node auto-authentication failed"
-                    );
+                } else {
+                    let error_msg = "Auth response missing result".to_string();
                     state.node_auth_state.set_failed(error_msg.clone());
                     return EngineResponse::err("NODE_NOT_AUTHENTICATED", &error_msg);
                 }
+            } else {
+                let err_msg = response.error.as_ref()
+                    .map(|e| e.message.as_str())
+                    .unwrap_or("Unknown error");
+                let error_msg = format!("Node authentication failed: {}", err_msg);
+                tracing::error!(
+                    op = "node_session.auto_auth_failed",
+                    error = %err_msg,
+                    "Node auto-authentication failed"
+                );
+                state.node_auth_state.set_failed(error_msg.clone());
+                return EngineResponse::err("NODE_NOT_AUTHENTICATED", &error_msg);
             }
         }
     };
@@ -857,7 +485,6 @@ fn handle_bootstrap_node_session(payload: &Value, state: &EngineState) -> Engine
                 .or_else(|| std::env::var("ENGINE_URL").ok())
                 .unwrap_or_default(),
             node_url: std::env::var("NODE_URL").unwrap_or_else(|_| "http://127.0.0.1:7777".to_string()),
-            session_token: node_token.token.clone(),
             tenant_id: node_token.tenant_id,
             workspace_id: node_token.workspace_id,
             node_id,
@@ -896,20 +523,15 @@ fn handle_bootstrap_node_session(payload: &Value, state: &EngineState) -> Engine
     }))
 }
 
-/// Get current node session status
+/// Get current node session status (host probes state, core formats response)
 fn handle_node_session_status(state: &EngineState) -> EngineResponse {
-    let identity = state.node_identity.lock().ok().and_then(|g| g.clone());
     let session = state.node_session.get();
 
-    EngineResponse::ok(serde_json::json!({
-        "hasIdentity": identity.is_some(),
+    let payload = serde_json::json!({
+        "hasIdentity": false,
         "hasSession": session.is_some(),
         "sessionValid": state.node_session.get_valid().is_some(),
-        "identity": identity.map(|i| serde_json::json!({
-            "node_id": i.node_id.to_string(),
-            "public_key_b64": i.public_key_b64,
-            "created_at": i.created_at_iso_utc
-        })),
+        "identity": null,
         "session": session.map(|s| serde_json::json!({
             "session_id": s.session_id.to_string(),
             "tenant_id": s.tenant_id.to_string(),
@@ -917,335 +539,7 @@ fn handle_node_session_status(state: &EngineState) -> EngineResponse {
             "expires_at": s.expires_at.to_rfc3339(),
             "is_expired": s.is_expired()
         }))
-    }))
-}
-
-// =============================================================================
-// Workflow Runs Handlers (Proxied HTTP)
-// =============================================================================
-
-/// Build security envelope headers for proxied requests
-fn build_security_headers(jwt: Option<&str>, module: &str, action: &str) -> Vec<(String, String)> {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let mut headers = vec![
-        ("Content-Type".to_string(), "application/json".to_string()),
-        ("X-REQUEST-ID".to_string(), request_id.clone()),
-        ("X-EKKA-CORRELATION-ID".to_string(), request_id),
-        ("X-EKKA-PROOF-TYPE".to_string(), if jwt.is_some() { "jwt" } else { "none" }.to_string()),
-        ("X-EKKA-MODULE".to_string(), module.to_string()),
-        ("X-EKKA-ACTION".to_string(), action.to_string()),
-        ("X-EKKA-CLIENT".to_string(), config::app_slug().to_string()),
-        ("X-EKKA-CLIENT-VERSION".to_string(), "0.2.0".to_string()),
-    ];
-
-    if let Some(token) = jwt {
-        headers.push(("Authorization".to_string(), format!("Bearer {}", token)));
-    }
-
-    headers
-}
-
-/// Create a workflow run (POST /engine/workflow-runs)
-fn handle_workflow_runs_create(payload: &Value) -> EngineResponse {
-    let engine_url = option_env!("EKKA_ENGINE_URL")
-        .unwrap_or("http://localhost:3200")
-        .to_string();
-
-    // Extract request body
-    let request = match payload.get("request") {
-        Some(r) => r.clone(),
-        None => return EngineResponse::err("INVALID_PAYLOAD", "request is required"),
-    };
-
-    // Extract optional JWT
-    let jwt = payload.get("jwt").and_then(|v| v.as_str());
-
-    // Build client
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return EngineResponse::err("HTTP_CLIENT_ERROR", &e.to_string()),
-    };
-
-    // Build request
-    let headers = build_security_headers(jwt, "desktop.docgen", "workflow.create");
-    let mut req_builder = client.post(format!("{}/engine/workflow-runs", engine_url));
-
-    for (key, value) in headers {
-        req_builder = req_builder.header(&key, &value);
-    }
-
-    let response = req_builder.json(&request).send();
-
-    match response {
-        Ok(resp) => {
-            let status = resp.status();
-            if status.is_success() {
-                match resp.json::<serde_json::Value>() {
-                    Ok(data) => EngineResponse::ok(data),
-                    Err(e) => EngineResponse::err("PARSE_ERROR", &e.to_string()),
-                }
-            } else {
-                let status_code = status.as_u16();
-                let body = resp.text().unwrap_or_default();
-                let error_msg = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("message").or(v.get("error")).and_then(|m| m.as_str()).map(|s| s.to_string()))
-                    .unwrap_or_else(|| format!("HTTP {}", status_code));
-                EngineResponse::err_with_status("HTTP_ERROR", &error_msg, status_code)
-            }
-        }
-        Err(e) => {
-            if e.is_connect() {
-                EngineResponse::err("ENGINE_UNAVAILABLE", &format!("Cannot connect to engine at {}. Is the engine running?", engine_url))
-            } else {
-                EngineResponse::err("REQUEST_FAILED", &e.to_string())
-            }
-        }
-    }
-}
-
-/// Get a workflow run (GET /engine/workflow-runs/{id})
-fn handle_workflow_runs_get(payload: &Value) -> EngineResponse {
-    let engine_url = option_env!("EKKA_ENGINE_URL")
-        .unwrap_or("http://localhost:3200")
-        .to_string();
-
-    // Extract workflow run ID
-    let id = match payload.get("id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return EngineResponse::err("INVALID_PAYLOAD", "id is required"),
-    };
-
-    // Extract optional JWT
-    let jwt = payload.get("jwt").and_then(|v| v.as_str());
-
-    // Build client
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return EngineResponse::err("HTTP_CLIENT_ERROR", &e.to_string()),
-    };
-
-    // Build request
-    let headers = build_security_headers(jwt, "desktop.docgen", "workflow.get");
-    let mut req_builder = client.get(format!("{}/engine/workflow-runs/{}", engine_url, id));
-
-    for (key, value) in headers {
-        req_builder = req_builder.header(&key, &value);
-    }
-
-    let response = req_builder.send();
-
-    match response {
-        Ok(resp) => {
-            let status = resp.status();
-            if status.is_success() {
-                match resp.json::<serde_json::Value>() {
-                    Ok(data) => EngineResponse::ok(data),
-                    Err(e) => EngineResponse::err("PARSE_ERROR", &e.to_string()),
-                }
-            } else {
-                let status_code = status.as_u16();
-                let body = resp.text().unwrap_or_default();
-                let error_msg = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("message").or(v.get("error")).and_then(|m| m.as_str()).map(|s| s.to_string()))
-                    .unwrap_or_else(|| format!("HTTP {}", status_code));
-                EngineResponse::err_with_status("HTTP_ERROR", &error_msg, status_code)
-            }
-        }
-        Err(e) => {
-            if e.is_connect() {
-                EngineResponse::err("ENGINE_UNAVAILABLE", &format!("Cannot connect to engine at {}. Is the engine running?", engine_url))
-            } else {
-                EngineResponse::err("REQUEST_FAILED", &e.to_string())
-            }
-        }
-    }
-}
-
-// =============================================================================
-// Auth Handlers (Proxied HTTP)
-// =============================================================================
-
-/// Login (POST /auth/login)
-fn handle_auth_login(payload: &Value) -> EngineResponse {
-    let api_url = std::env::var("EKKA_API_URL")
-        .unwrap_or_else(|_| "https://api.ekka.ai".to_string());
-
-    // Extract credentials
-    let identifier = match payload.get("identifier").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => return EngineResponse::err("INVALID_PAYLOAD", "identifier is required"),
-    };
-    let password = match payload.get("password").and_then(|v| v.as_str()) {
-        Some(p) => p,
-        None => return EngineResponse::err("INVALID_PAYLOAD", "password is required"),
-    };
-
-    // Build client
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return EngineResponse::err("HTTP_CLIENT_ERROR", &e.to_string()),
-    };
-
-    // Build request
-    let headers = build_security_headers(None, "auth", "login");
-    let mut req_builder = client.post(format!("{}/auth/login", api_url));
-
-    for (key, value) in headers {
-        req_builder = req_builder.header(&key, &value);
-    }
-
-    let body = serde_json::json!({
-        "identifier": identifier,
-        "password": password
     });
 
-    let response = req_builder.json(&body).send();
-
-    match response {
-        Ok(resp) => {
-            let status = resp.status();
-            if status.is_success() {
-                match resp.json::<serde_json::Value>() {
-                    Ok(data) => EngineResponse::ok(data),
-                    Err(e) => EngineResponse::err("PARSE_ERROR", &e.to_string()),
-                }
-            } else {
-                let status_code = status.as_u16();
-                let body = resp.text().unwrap_or_default();
-                let error_msg = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("message").or(v.get("error")).and_then(|m| m.as_str()).map(|s| s.to_string()))
-                    .unwrap_or_else(|| format!("HTTP {}", status_code));
-                EngineResponse::err_with_status("AUTH_ERROR", &error_msg, status_code)
-            }
-        }
-        Err(e) => EngineResponse::err("REQUEST_FAILED", &e.to_string()),
-    }
-}
-
-/// Refresh token (POST /auth/refresh)
-fn handle_auth_refresh(payload: &Value) -> EngineResponse {
-    let api_url = std::env::var("EKKA_API_URL")
-        .unwrap_or_else(|_| "https://api.ekka.ai".to_string());
-
-    // Extract refresh token
-    let refresh_token = match payload.get("refresh_token").and_then(|v| v.as_str()) {
-        Some(t) => t,
-        None => return EngineResponse::err("INVALID_PAYLOAD", "refresh_token is required"),
-    };
-
-    // Extract optional current JWT
-    let jwt = payload.get("jwt").and_then(|v| v.as_str());
-
-    // Build client
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return EngineResponse::err("HTTP_CLIENT_ERROR", &e.to_string()),
-    };
-
-    // Build request
-    let headers = build_security_headers(jwt, "auth", "refresh_token");
-    let mut req_builder = client.post(format!("{}/auth/refresh", api_url));
-
-    for (key, value) in headers {
-        req_builder = req_builder.header(&key, &value);
-    }
-
-    let body = serde_json::json!({
-        "refresh_token": refresh_token
-    });
-
-    let response = req_builder.json(&body).send();
-
-    match response {
-        Ok(resp) => {
-            let status = resp.status();
-            if status.is_success() {
-                match resp.json::<serde_json::Value>() {
-                    Ok(data) => EngineResponse::ok(data),
-                    Err(e) => EngineResponse::err("PARSE_ERROR", &e.to_string()),
-                }
-            } else {
-                let status_code = status.as_u16();
-                let body = resp.text().unwrap_or_default();
-                let error_msg = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("message").or(v.get("error")).and_then(|m| m.as_str()).map(|s| s.to_string()))
-                    .unwrap_or_else(|| format!("HTTP {}", status_code));
-                EngineResponse::err_with_status("AUTH_ERROR", &error_msg, status_code)
-            }
-        }
-        Err(e) => EngineResponse::err("REQUEST_FAILED", &e.to_string()),
-    }
-}
-
-/// Logout (POST /auth/logout)
-fn handle_auth_logout(payload: &Value) -> EngineResponse {
-    let api_url = std::env::var("EKKA_API_URL")
-        .unwrap_or_else(|_| "https://api.ekka.ai".to_string());
-
-    // Extract refresh token
-    let refresh_token = match payload.get("refresh_token").and_then(|v| v.as_str()) {
-        Some(t) => t,
-        None => return EngineResponse::err("INVALID_PAYLOAD", "refresh_token is required"),
-    };
-
-    // Build client
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return EngineResponse::err("HTTP_CLIENT_ERROR", &e.to_string()),
-    };
-
-    // Build request
-    let headers = build_security_headers(None, "auth", "logout");
-    let mut req_builder = client.post(format!("{}/auth/logout", api_url));
-
-    for (key, value) in headers {
-        req_builder = req_builder.header(&key, &value);
-    }
-
-    let body = serde_json::json!({
-        "refresh_token": refresh_token
-    });
-
-    let response = req_builder.json(&body).send();
-
-    match response {
-        Ok(resp) => {
-            let status = resp.status();
-            if status.is_success() {
-                match resp.json::<serde_json::Value>() {
-                    Ok(data) => EngineResponse::ok(data),
-                    Err(e) => EngineResponse::err("PARSE_ERROR", &e.to_string()),
-                }
-            } else {
-                // Logout errors are typically ignored, but still return properly
-                let status_code = status.as_u16();
-                let body = resp.text().unwrap_or_default();
-                let error_msg = serde_json::from_str::<Value>(&body)
-                    .ok()
-                    .and_then(|v| v.get("message").or(v.get("error")).and_then(|m| m.as_str()).map(|s| s.to_string()))
-                    .unwrap_or_else(|| format!("HTTP {}", status_code));
-                EngineResponse::err_with_status("AUTH_ERROR", &error_msg, status_code)
-            }
-        }
-        Err(e) => EngineResponse::err("REQUEST_FAILED", &e.to_string()),
-    }
+    state.core_process.request("nodeSession.status", &payload)
 }

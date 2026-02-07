@@ -1,9 +1,9 @@
 //! Application state management
 //!
-//! Contains the shared state accessible across Tauri commands.
+//! Contains the shared state accessible across Bridge commands.
 
-use crate::engine_process::{EngineProcess, EngineStatus};
-use crate::node_auth::{NodeIdentity, NodeSessionHolder};
+use crate::core_process::CoreProcessManager;
+use crate::node_auth::NodeSessionHolder;
 use crate::node_credentials::NodeAuthTokenHolder;
 use chrono::{DateTime, Utc};
 use ekka_sdk_core::ekka_ops::{
@@ -76,11 +76,6 @@ impl NodeAuthStateHolder {
         }
     }
 
-    /// Get current state
-    pub fn get(&self) -> NodeAuthState {
-        self.state.read().map(|g| *g).unwrap_or(NodeAuthState::Unauthenticated)
-    }
-
     /// Try to start auth - returns true if allowed, false if already in progress or failed
     pub fn try_start(&self) -> bool {
         if let Ok(mut guard) = self.state.write() {
@@ -116,21 +111,6 @@ impl NodeAuthStateHolder {
         }
     }
 
-    /// Get last error if failed
-    pub fn get_last_error(&self) -> Option<String> {
-        self.last_error.read().ok().and_then(|g| g.clone())
-    }
-
-    /// Reset to unauthenticated (e.g., on logout or credential change)
-    #[allow(dead_code)]
-    pub fn reset(&self) {
-        if let Ok(mut guard) = self.state.write() {
-            *guard = NodeAuthState::Unauthenticated;
-        }
-        if let Ok(mut guard) = self.last_error.write() {
-            *guard = None;
-        }
-    }
 }
 
 impl Default for NodeAuthStateHolder {
@@ -305,7 +285,7 @@ fn sanitize_error(error: &str) -> String {
     }
 }
 
-/// Global engine state managed by Tauri
+/// Global engine state managed by EKKA Bridge
 pub struct EngineState {
     pub connected: Mutex<bool>,
     pub auth: Mutex<Option<AuthContext>>,
@@ -315,18 +295,16 @@ pub struct EngineState {
     vault_cache: VaultCache,
     /// Local runner status for this desktop instance
     pub runner_state: RunnerState,
-    /// Node identity metadata (public key, etc.)
-    pub node_identity: Mutex<Option<NodeIdentity>>,
     /// Node session holder (in-memory only, never persisted)
     pub node_session: Arc<NodeSessionHolder>,
     /// Node auth token holder (in-memory only, role=node JWT)
     pub node_auth_token: Arc<NodeAuthTokenHolder>,
     /// Node auth state (single-flight guard to prevent retry storms)
     pub node_auth_state: Arc<NodeAuthStateHolder>,
-    /// External engine process (Phase 3A)
-    pub engine_process: Option<Arc<EngineProcess>>,
     /// Cached grant verification key (fetched from /.well-known/ekka-configuration)
     pub grant_verify_key: RwLock<Option<String>>,
+    /// Desktop Core process manager (JSON-RPC over stdio)
+    pub core_process: Arc<CoreProcessManager>,
 }
 
 impl Default for EngineState {
@@ -338,68 +316,19 @@ impl Default for EngineState {
             node_id: Mutex::new(None),
             vault_cache: VaultCache::new(),
             runner_state: RunnerState::new(),
-            node_identity: Mutex::new(None),
             node_session: Arc::new(NodeSessionHolder::new()),
             node_auth_token: Arc::new(NodeAuthTokenHolder::new()),
             node_auth_state: Arc::new(NodeAuthStateHolder::new()),
-            engine_process: None,
             grant_verify_key: RwLock::new(None),
+            core_process: Arc::new(CoreProcessManager::new()),
         }
     }
 }
 
 impl EngineState {
-    /// Create EngineState with an engine process holder
-    pub fn with_engine(engine: Arc<EngineProcess>) -> Self {
-        Self {
-            connected: Mutex::new(false),
-            auth: Mutex::new(None),
-            home_path: Mutex::new(None),
-            node_id: Mutex::new(None),
-            vault_cache: VaultCache::new(),
-            runner_state: RunnerState::new(),
-            node_identity: Mutex::new(None),
-            node_session: Arc::new(NodeSessionHolder::new()),
-            node_auth_token: Arc::new(NodeAuthTokenHolder::new()),
-            node_auth_state: Arc::new(NodeAuthStateHolder::new()),
-            engine_process: Some(engine),
-            grant_verify_key: RwLock::new(None),
-        }
-    }
-
     /// Get the node auth token if available and valid
     pub fn get_node_auth_token(&self) -> Option<crate::node_credentials::NodeAuthToken> {
         self.node_auth_token.get_valid()
-    }
-
-    /// Check if external engine is available
-    pub fn is_engine_available(&self) -> bool {
-        self.engine_process
-            .as_ref()
-            .map(|e| e.is_available())
-            .unwrap_or(false)
-    }
-
-    /// Permanently disable engine routing for this session (one-way switch)
-    pub fn disable_engine(&self) {
-        if let Some(engine) = &self.engine_process {
-            engine.disable();
-        }
-    }
-
-    /// Get engine status (read-only diagnostics)
-    pub fn get_engine_status(&self) -> EngineStatus {
-        self.engine_process
-            .as_ref()
-            .map(|e| e.get_status())
-            .unwrap_or(EngineStatus {
-                installed: false,
-                running: false,
-                available: false,
-                pid: None,
-                version: None,
-                build: None,
-            })
     }
 
     /// Create a RuntimeContext from current state

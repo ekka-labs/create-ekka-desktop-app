@@ -5,7 +5,7 @@
 
 import { type CSSProperties, type ReactElement } from 'react';
 
-export type Page = 'audit-log' | 'path-permissions' | 'vault' | 'doc-gen' | 'runner' | 'system';
+export type Page = 'audit-log' | 'path-permissions' | 'vault' | 'runner' | 'system';
 
 interface SidebarProps {
   selectedPage: Page;
@@ -125,7 +125,6 @@ export function Sidebar({ selectedPage, onNavigate, darkMode }: SidebarProps): R
         <div style={styles.sectionLabel}>Tools</div>
         <NavButton page="path-permissions" label="Path Permissions" icon={<PathIcon />} />
         <NavButton page="vault" label="Vault" icon={<VaultIcon />} />
-        <NavButton page="doc-gen" label="Generate Docs" icon={<DocGenIcon />} />
         <NavButton page="runner" label="Runner" icon={<RunnerIcon />} />
         <NavButton page="audit-log" label="Audit Log" icon={<AuditIcon />} />
       </nav>
@@ -168,15 +167,6 @@ function SystemIcon(): ReactElement {
     <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
       <path d="M8 0L1 3v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V3L8 0zm0 1.2L14 3.7v4.8c0 3.8-2.5 6.3-6 7.7-3.5-1.4-6-3.9-6-7.7V3.7L8 1.2z" />
       <path d="M6.5 7.5L5 9l2 2 4-4-1.5-1.5L7 8l-.5-.5z" />
-    </svg>
-  );
-}
-
-function DocGenIcon(): ReactElement {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
-      <path d="M14 4.5V14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V2a2 2 0 0 1 2-2h5.5L14 4.5zM9.5 4V1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V4.5h-3.5z" />
-      <path d="M4.5 12.5A.5.5 0 0 1 5 12h3a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5zm0-2A.5.5 0 0 1 5 10h6a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5zm0-2A.5.5 0 0 1 5 8h6a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5zm0-2A.5.5 0 0 1 5 6h6a.5.5 0 0 1 0 1H5a.5.5 0 0 1-.5-.5z" />
     </svg>
   );
 }

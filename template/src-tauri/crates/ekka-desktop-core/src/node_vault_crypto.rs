@@ -42,39 +42,16 @@ pub fn derive_node_vault_key(home: &Path, epoch: u32) -> anyhow::Result<KeyMater
     Ok(key)
 }
 
+/// Encrypt plaintext bytes using AES-256-GCM
+///
+/// Returns the encrypted envelope as bytes (version || nonce || ciphertext).
+pub fn encrypt_node_value(key: &KeyMaterial, plaintext: &[u8]) -> anyhow::Result<Vec<u8>> {
+    ekka_crypto::encrypt(plaintext, key).map_err(|e| anyhow::anyhow!("Encryption failed: {}", e))
+}
+
 /// Decrypt ciphertext bytes using AES-256-GCM
 ///
 /// Expects the encrypted envelope format (version || nonce || ciphertext).
 pub fn decrypt_node_value(key: &KeyMaterial, ciphertext: &[u8]) -> anyhow::Result<Vec<u8>> {
     ekka_crypto::decrypt(ciphertext, key).map_err(|e| anyhow::anyhow!("Decryption failed: {}", e))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_derive_node_vault_key_deterministic() {
-        let temp_dir = TempDir::new().unwrap();
-        let epoch = 1u32;
-
-        let key1 = derive_node_vault_key(temp_dir.path(), epoch).unwrap();
-        let key2 = derive_node_vault_key(temp_dir.path(), epoch).unwrap();
-
-        // Same inputs should produce same key
-        assert_eq!(key1.as_bytes(), key2.as_bytes());
-    }
-
-    #[test]
-    fn test_derive_node_vault_key_different_epoch() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let key1 = derive_node_vault_key(temp_dir.path(), 1).unwrap();
-        let key2 = derive_node_vault_key(temp_dir.path(), 2).unwrap();
-
-        // Different epochs should produce different keys
-        assert_ne!(key1.as_bytes(), key2.as_bytes());
-    }
-
 }

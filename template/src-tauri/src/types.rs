@@ -1,6 +1,6 @@
 //! Contract types for TypeScript ↔ Rust communication
 //!
-//! These types define the RPC protocol between the frontend and Tauri backend.
+//! These types define the RPC protocol between the frontend and EKKA Bridge.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -46,16 +46,6 @@ impl EngineResponse {
         }
     }
 
-    /// Success response with null result
-    #[allow(dead_code)]
-    pub fn ok_null() -> Self {
-        Self {
-            ok: true,
-            result: Some(Value::Null),
-            error: None,
-        }
-    }
-
     /// Error response
     pub fn err(code: &str, message: &str) -> Self {
         Self {
@@ -69,16 +59,4 @@ impl EngineResponse {
         }
     }
 
-    /// Error response with HTTP status code
-    pub fn err_with_status(code: &str, message: &str, status: u16) -> Self {
-        Self {
-            ok: false,
-            result: None,
-            error: Some(EngineError {
-                code: code.to_string(),
-                message: message.to_string(),
-                status: Some(status),
-            }),
-        }
-    }
 }

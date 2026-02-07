@@ -7,6 +7,7 @@
 //! - Uses node_credentials (vault) for authentication
 //! - Runner uses JWT token for all engine calls
 //! - Token refreshed automatically via node_secret auth when expired
+//! - **401 Recovery**: On HTTP 401, token is force-refreshed and request retried once
 //! - Tenant/workspace comes from token (EKKA decides scope)
 //!
 //! ## Security
@@ -15,8 +16,6 @@
 //! - NO environment variable credentials
 //! - Tokens held in memory only
 //! - node_secret never logged
-
-#![allow(dead_code)] // API types and fields may not all be used yet
 
 use crate::config;
 use crate::node_auth::{NodeSession, NodeSessionHolder, NodeSessionRunnerConfig};
@@ -33,7 +32,6 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-const DEFAULT_NODE_URL: &str = "http://127.0.0.1:7777";
 const POLL_INTERVAL_SECS: u64 = 5;
 const MAX_POLL_LIMIT: u32 = 10;
 const RUNNER_ID_PREFIX: &str = "ekka-node-runner";
@@ -42,16 +40,37 @@ const RUNNER_ID_PREFIX: &str = "ekka-node-runner";
 // Types (duplicated from ekka-runner-core to avoid internal key dependency)
 // =============================================================================
 
+/// V2 poll response
 #[derive(Debug, Deserialize)]
 struct EnginePollResponse {
     tasks: Vec<EngineTaskInfo>,
 }
 
+/// V2 task info - uses capability_identity instead of task_type/task_subtype
 #[derive(Debug, Clone, Deserialize)]
 struct EngineTaskInfo {
     id: String,
-    task_type: String,
-    task_subtype: Option<String>,
+    #[allow(dead_code)]
+    run_id: String,
+    /// Capability identity (e.g., "ekka.prompt.run.v1") - maps to task_subtype for dispatch
+    capability_identity: String,
+    #[serde(default)]
+    target_type: Option<String>,
+}
+
+impl EngineTaskInfo {
+    /// Map capability_identity to legacy task_subtype for dispatch compatibility
+    fn task_subtype(&self) -> Option<&str> {
+        // Map capability identities to task subtypes
+        if self.capability_identity.contains("prompt") {
+            Some("prompt_run")
+        } else if self.capability_identity.contains("node_exec") {
+            Some("node_exec")
+        } else {
+            // Return capability_identity as-is, dispatch will handle unknown types
+            Some(self.capability_identity.as_str())
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,15 +78,15 @@ struct EngineClaimResponse {
     input_json: serde_json::Value,
 }
 
+/// V2 complete request - output is a JSON value
 #[derive(Debug, Serialize)]
 struct EngineCompleteRequest {
     runner_id: String,
-    output: EngineCompleteOutput,
     #[serde(skip_serializing_if = "Option::is_none")]
-    duration_ms: Option<u64>,
+    output: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct EngineCompleteOutput {
     decision: String,
     reason: String,
@@ -75,16 +94,15 @@ struct EngineCompleteOutput {
     proposed_patch: Option<Vec<serde_json::Value>>,
 }
 
+/// V2 fail request - error_code required, error_message optional
 #[derive(Debug, Serialize)]
 struct EngineFailRequest {
     runner_id: String,
-    error: String,
+    error_code: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error_code: Option<String>,
+    error_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     retryable: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    duration_ms: Option<u64>,
 }
 
 // =============================================================================
@@ -154,7 +172,6 @@ struct NodeSessionRunner {
     runner_id: String,
     session_holder: Arc<NodeSessionHolder>,
     home_path: PathBuf,
-    device_fingerprint: Option<String>,
     /// User subject (from JWT) for PathGuard grant validation
     user_sub: Option<String>,
 }
@@ -164,7 +181,6 @@ impl NodeSessionRunner {
         config: &NodeSessionRunnerConfig,
         session_holder: Arc<NodeSessionHolder>,
         home_path: PathBuf,
-        device_fingerprint: Option<String>,
         user_sub: Option<String>,
     ) -> Self {
         let client = Client::builder()
@@ -182,7 +198,6 @@ impl NodeSessionRunner {
             runner_id,
             session_holder,
             home_path,
-            device_fingerprint,
             user_sub,
         }
     }
@@ -240,6 +255,30 @@ impl NodeSessionRunner {
         Ok(session)
     }
 
+    /// Force refresh the session (clear cache and re-authenticate)
+    /// Used when server returns 401 to recover from token invalidation
+    async fn force_refresh_session(&self) -> Result<NodeSession, String> {
+        info!(
+            op = "node_runner.force_refresh.start",
+            "Forcing session refresh due to 401"
+        );
+
+        // Clear the cached session to force re-authentication
+        self.session_holder.clear();
+
+        // Now get_session will re-authenticate since cache is empty
+        self.get_session().await
+    }
+
+    /// Check if an error indicates token expiry (401)
+    fn is_token_expired_error(status: reqwest::StatusCode, body: &str) -> bool {
+        status == reqwest::StatusCode::UNAUTHORIZED ||
+        body.contains("Token expired") ||
+        body.contains("token expired") ||
+        body.contains("jwt expired") ||
+        body.contains("invalid token")
+    }
+
     /// Get security headers using current session
     async fn security_headers(&self) -> Result<Vec<(&'static str, String)>, String> {
         let session = self.get_session().await?;
@@ -257,28 +296,50 @@ impl NodeSessionRunner {
     }
 
     async fn poll_tasks(&self) -> Result<Vec<EngineTaskInfo>, String> {
-        let session = self.get_session().await?;
+        // Try up to 2 times (initial + 1 retry after 401)
+        for attempt in 0..2 {
+            let session = self.get_session().await?;
 
-        let url = format!(
-            "{}/engine/runner-tasks?status=pending&limit={}&tenant_id={}&workspace_id={}",
-            self.engine_url, MAX_POLL_LIMIT, session.tenant_id, session.workspace_id
-        );
+            // V2 endpoint with target_type=runner_desktop to get desktop runner tasks
+            let url = format!(
+                "{}/engine/runner-tasks-v2?target_type=runner_desktop&status=pending&limit={}&tenant_id={}&workspace_id={}",
+                self.engine_url, MAX_POLL_LIMIT, session.tenant_id, session.workspace_id
+            );
 
-        let headers = self.security_headers().await?;
-        let mut req = self.client.get(&url);
-        for (k, v) in headers {
-            req = req.header(k, v);
-        }
-        req = req.header("X-EKKA-ACTION", "list");
+            let headers = self.security_headers().await?;
+            let mut req = self.client.get(&url);
+            for (k, v) in headers {
+                req = req.header(k, v);
+            }
+            req = req.header("X-EKKA-ACTION", "poll");
 
-        let response = req
-            .send()
-            .await
-            .map_err(|e| format!("Poll failed: {}", e))?;
+            let response = req
+                .send()
+                .await
+                .map_err(|e| format!("Poll failed: {}", e))?;
 
-        if !response.status().is_success() {
+            if response.status().is_success() {
+                let poll: EnginePollResponse = response
+                    .json()
+                    .await
+                    .map_err(|e| format!("Parse poll response: {}", e))?;
+                return Ok(poll.tasks);
+            }
+
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+
+            // Handle 401: force refresh and retry once
+            if attempt == 0 && Self::is_token_expired_error(status, &body) {
+                warn!(
+                    op = "node_runner.poll.401_recovery",
+                    status = %status,
+                    "Got 401 on poll, refreshing token and retrying"
+                );
+                self.force_refresh_session().await?;
+                continue;
+            }
+
             return Err(format!(
                 "Poll failed ({}): {}",
                 status,
@@ -286,38 +347,54 @@ impl NodeSessionRunner {
             ));
         }
 
-        let poll: EnginePollResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Parse poll response: {}", e))?;
-
-        Ok(poll.tasks)
+        Err("Poll failed after retry".to_string())
     }
 
     async fn claim_task(&self, task_id: &str) -> Result<EngineClaimResponse, String> {
-        let session = self.get_session().await?;
+        // Try up to 2 times (initial + 1 retry after 401)
+        for attempt in 0..2 {
+            let session = self.get_session().await?;
 
-        let url = format!(
-            "{}/engine/runner-tasks/{}/claim?tenant_id={}&workspace_id={}",
-            self.engine_url, task_id, session.tenant_id, session.workspace_id
-        );
+            // V2 endpoint
+            let url = format!(
+                "{}/engine/runner-tasks-v2/{}/claim?tenant_id={}&workspace_id={}",
+                self.engine_url, task_id, session.tenant_id, session.workspace_id
+            );
 
-        let headers = self.security_headers().await?;
-        let mut req = self.client.post(&url);
-        for (k, v) in headers {
-            req = req.header(k, v);
-        }
-        req = req.header("X-EKKA-ACTION", "claim");
+            let headers = self.security_headers().await?;
+            let mut req = self.client.post(&url);
+            for (k, v) in headers {
+                req = req.header(k, v);
+            }
+            req = req.header("X-EKKA-ACTION", "claim");
 
-        let response = req
-            .json(&serde_json::json!({ "runner_id": self.runner_id }))
-            .send()
-            .await
-            .map_err(|e| format!("Claim failed: {}", e))?;
+            let response = req
+                .json(&serde_json::json!({ "runner_id": self.runner_id }))
+                .send()
+                .await
+                .map_err(|e| format!("Claim failed: {}", e))?;
 
-        if !response.status().is_success() {
+            if response.status().is_success() {
+                return response
+                    .json()
+                    .await
+                    .map_err(|e| format!("Parse claim response: {}", e));
+            }
+
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+
+            // Handle 401: force refresh and retry once
+            if attempt == 0 && Self::is_token_expired_error(status, &body) {
+                warn!(
+                    op = "node_runner.claim.401_recovery",
+                    task_id = %&task_id[..8.min(task_id.len())],
+                    "Got 401 on claim, refreshing token and retrying"
+                );
+                self.force_refresh_session().await?;
+                continue;
+            }
+
             return Err(format!(
                 "Claim failed ({}): {}",
                 status,
@@ -325,56 +402,74 @@ impl NodeSessionRunner {
             ));
         }
 
-        response
-            .json()
-            .await
-            .map_err(|e| format!("Parse claim response: {}", e))
+        Err("Claim failed after retry".to_string())
     }
 
     async fn complete_task(
         &self,
         task_id: &str,
         output: EngineCompleteOutput,
-        duration_ms: Option<u64>,
+        _duration_ms: Option<u64>,
     ) -> Result<(), String> {
-        let session = self.get_session().await?;
+        // Serialize output once for potential retry
+        let output_json = serde_json::to_value(&output)
+            .map_err(|e| format!("Failed to serialize output: {}", e))?;
 
-        let url = format!(
-            "{}/engine/runner-tasks/{}/complete?tenant_id={}&workspace_id={}",
-            self.engine_url, task_id, session.tenant_id, session.workspace_id
-        );
+        // Try up to 2 times (initial + 1 retry after 401)
+        for attempt in 0..2 {
+            let session = self.get_session().await?;
 
-        let headers = self.security_headers().await?;
-        let mut req = self.client.post(&url);
-        for (k, v) in headers {
-            req = req.header(k, v);
-        }
-        req = req.header("X-EKKA-ACTION", "complete");
+            // V2 endpoint
+            let url = format!(
+                "{}/engine/runner-tasks-v2/{}/complete?tenant_id={}&workspace_id={}",
+                self.engine_url, task_id, session.tenant_id, session.workspace_id
+            );
 
-        let body = EngineCompleteRequest {
-            runner_id: self.runner_id.clone(),
-            output,
-            duration_ms,
-        };
+            let headers = self.security_headers().await?;
+            let mut req = self.client.post(&url);
+            for (k, v) in headers {
+                req = req.header(k, v);
+            }
+            req = req.header("X-EKKA-ACTION", "complete");
 
-        // DEBUG: Log FULL request details before sending
-        let body_json_str = serde_json::to_string(&body).unwrap_or_default();
-        tracing::info!(
-            op = "node_runner.complete.debug",
-            url = %url,
-            body_json = %body_json_str,
-            "Complete request - FULL BODY"
-        );
+            let body = EngineCompleteRequest {
+                runner_id: self.runner_id.clone(),
+                output: Some(output_json.clone()),
+            };
 
-        let response = req
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Complete failed: {}", e))?;
+            // DEBUG: Log FULL request details before sending
+            let body_json_str = serde_json::to_string(&body).unwrap_or_default();
+            tracing::info!(
+                op = "node_runner.complete.debug",
+                url = %url,
+                body_json = %body_json_str,
+                "Complete request - FULL BODY"
+            );
 
-        if !response.status().is_success() {
+            let response = req
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("Complete failed: {}", e))?;
+
+            if response.status().is_success() {
+                return Ok(());
+            }
+
             let status = response.status();
             let body_text = response.text().await.unwrap_or_default();
+
+            // Handle 401: force refresh and retry once
+            if attempt == 0 && Self::is_token_expired_error(status, &body_text) {
+                warn!(
+                    op = "node_runner.complete.401_recovery",
+                    task_id = %&task_id[..8.min(task_id.len())],
+                    "Got 401 on complete, refreshing token and retrying"
+                );
+                self.force_refresh_session().await?;
+                continue;
+            }
+
             tracing::error!(
                 op = "node_runner.complete.response_error",
                 status = %status,
@@ -388,7 +483,7 @@ impl NodeSessionRunner {
             ));
         }
 
-        Ok(())
+        Err("Complete failed after retry".to_string())
     }
 
     async fn fail_task(
@@ -398,69 +493,61 @@ impl NodeSessionRunner {
         code: &str,
         retryable: bool,
     ) -> Result<(), String> {
-        let session = self.get_session().await?;
+        // Try up to 2 times (initial + 1 retry after 401)
+        for attempt in 0..2 {
+            let session = self.get_session().await?;
 
-        let url = format!(
-            "{}/engine/runner-tasks/{}/fail?tenant_id={}&workspace_id={}",
-            self.engine_url, task_id, session.tenant_id, session.workspace_id
-        );
+            // V2 endpoint
+            let url = format!(
+                "{}/engine/runner-tasks-v2/{}/fail?tenant_id={}&workspace_id={}",
+                self.engine_url, task_id, session.tenant_id, session.workspace_id
+            );
 
-        let headers = self.security_headers().await?;
-        let mut req = self.client.post(&url);
-        for (k, v) in headers {
-            req = req.header(k, v);
-        }
-        req = req.header("X-EKKA-ACTION", "fail");
+            let headers = self.security_headers().await?;
+            let mut req = self.client.post(&url);
+            for (k, v) in headers {
+                req = req.header(k, v);
+            }
+            req = req.header("X-EKKA-ACTION", "fail");
 
-        let body = EngineFailRequest {
-            runner_id: self.runner_id.clone(),
-            error: error.to_string(),
-            error_code: Some(code.to_string()),
-            retryable: Some(retryable),
-            duration_ms: None,
-        };
+            // V2 format: error_code required, error_message optional
+            let body = EngineFailRequest {
+                runner_id: self.runner_id.clone(),
+                error_code: code.to_string(),
+                error_message: Some(error.to_string()),
+                retryable: Some(retryable),
+            };
 
-        let response = req
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Fail failed: {}", e))?;
+            let response = req
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| format!("Fail failed: {}", e))?;
 
-        if !response.status().is_success() {
+            if response.status().is_success() {
+                return Ok(());
+            }
+
             let status = response.status();
+            let body_text = response.text().await.unwrap_or_default();
+
+            // Handle 401: force refresh and retry once
+            if attempt == 0 && Self::is_token_expired_error(status, &body_text) {
+                warn!(
+                    op = "node_runner.fail.401_recovery",
+                    task_id = %&task_id[..8.min(task_id.len())],
+                    "Got 401 on fail, refreshing token and retrying"
+                );
+                self.force_refresh_session().await?;
+                continue;
+            }
+
             return Err(format!("Fail failed ({})", status));
         }
 
-        Ok(())
+        Err("Fail failed after retry".to_string())
     }
 
-    async fn heartbeat(&self, task_id: &str) -> Result<(), String> {
-        let session = self.get_session().await?;
-
-        let url = format!(
-            "{}/engine/runner-tasks/{}/heartbeat?tenant_id={}&workspace_id={}",
-            self.engine_url, task_id, session.tenant_id, session.workspace_id
-        );
-
-        let headers = self.security_headers().await?;
-        let mut req = self.client.post(&url);
-        for (k, v) in headers {
-            req = req.header(k, v);
-        }
-        req = req.header("X-EKKA-ACTION", "heartbeat");
-
-        let response = req
-            .json(&serde_json::json!({ "runner_id": self.runner_id }))
-            .send()
-            .await
-            .map_err(|e| format!("Heartbeat failed: {}", e))?;
-
-        if !response.status().is_success() {
-            return Err(format!("Heartbeat failed ({})", response.status()));
-        }
-
-        Ok(())
-    }
 
     async fn process_task(&self, task: &EngineTaskInfo, cb: &Arc<dyn NodeRunnerCallback>) {
         let task_id = &task.id;
@@ -469,9 +556,9 @@ impl NodeSessionRunner {
         info!(
             op = "node_runner.task.start",
             task_id = %task_id_short,
-            task_type = %task.task_type,
-            task_subtype = ?task.task_subtype,
-            "Processing task"
+            capability = %task.capability_identity,
+            target_type = ?task.target_type,
+            "Processing task (V2)"
         );
 
         // Claim
@@ -555,10 +642,10 @@ impl NodeSessionRunner {
             Box::pin(async move { hb.send_heartbeat(&task_id).await })
         });
 
-        // Dispatch to actual executor
+        // Dispatch to actual executor using mapped task_subtype
         let start = std::time::Instant::now();
         let result = dispatch_task(
-            task.task_subtype.as_deref(),
+            task.task_subtype(),
             &self.client,
             &self.node_url,
             "", // session_id not used for prompt_run
@@ -706,8 +793,9 @@ impl NodeSessionRunnerHeartbeat {
             session
         };
 
+        // V2 endpoint
         let url = format!(
-            "{}/engine/runner-tasks/{}/heartbeat?tenant_id={}&workspace_id={}",
+            "{}/engine/runner-tasks-v2/{}/heartbeat?tenant_id={}&workspace_id={}",
             self.engine_url, task_id, session.tenant_id, session.workspace_id
         );
 
@@ -778,12 +866,12 @@ pub async fn run_node_session_runner_loop(
     config: NodeSessionRunnerConfig,
     session_holder: Arc<NodeSessionHolder>,
     home_path: PathBuf,
-    device_fingerprint: Option<String>,
+    _device_fingerprint: Option<String>,
     user_sub: Option<String>,
     state_cb: Option<Arc<dyn NodeRunnerCallback>>,
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) -> Result<(), String> {
-    let runner = NodeSessionRunner::new(&config, session_holder, home_path, device_fingerprint, user_sub);
+    let runner = NodeSessionRunner::new(&config, session_holder, home_path, user_sub);
     let cb = state_cb.unwrap_or_else(|| Arc::new(NoOpCallback));
 
     cb.on_start(&runner.runner_id);
@@ -792,8 +880,10 @@ pub async fn run_node_session_runner_loop(
         op = "node_runner.start",
         runner_id = %runner.runner_id,
         node_id = %runner.node_id,
+        engine_url = %runner.engine_url,
+        endpoint = "runner-tasks-v2",
         auth_method = "node_secret",
-        "Node session runner starting (uses node_secret auth)"
+        "Node session runner starting (V2 endpoint, node_secret auth)"
     );
 
     let mut consecutive_errors: u32 = 0;

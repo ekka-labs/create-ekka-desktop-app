@@ -33,10 +33,6 @@ export const OPS = {
   RUNNER_STATUS: 'runner.status',
   RUNNER_TASK_STATS: 'runner.taskStats',
 
-  // Workflow Runs (proxied via Rust)
-  WORKFLOW_RUNS_CREATE: 'workflowRuns.create',
-  WORKFLOW_RUNS_GET: 'workflowRuns.get',
-
   // Auth (proxied via Rust)
   AUTH_LOGIN: 'auth.login',
   AUTH_REFRESH: 'auth.refresh',

@@ -18,7 +18,7 @@ export type TransportMode = 'unknown' | 'engine' | 'demo';
  * SmartBackend - single backend that auto-detects engine vs demo.
  *
  * On connect():
- * - Tries to connect to Tauri engine
+ * - Tries to connect to EKKA Bridge
  * - If successful: engine mode
  * - If fails: demo mode (in-memory)
  */
@@ -34,7 +34,7 @@ class SmartBackend {
   async connect(): Promise<void> {
     if (this.connected) return;
 
-    // Try engine first (only works in Tauri with engine present)
+    // Try engine first (only works in EKKA Bridge with engine present)
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('engine_connect');
@@ -88,7 +88,7 @@ class SmartBackend {
    * Send a request to the backend.
    */
   async request(req: EngineRequest): Promise<EngineResponse> {
-    // LOCAL-ONLY OPERATIONS: Always route to Tauri, never to demo backend
+    // LOCAL-ONLY OPERATIONS: Always route to Bridge, never to demo backend
     // These are desktop-specific operations that must be handled by Rust handlers
     const localOnlyOps = [
       'setup.status',
@@ -99,17 +99,17 @@ class SmartBackend {
 
     const isLocalOnlyOp = localOnlyOps.includes(req.op);
 
-    // Local-only ops ALWAYS go to Tauri - regardless of connection state or mode
+    // Local-only ops ALWAYS go to Bridge - regardless of connection state or mode
     // This ensures setup operations never accidentally route to demo backend
     if (isLocalOnlyOp) {
-      console.log(`[ts.op.dispatch] op=${req.op} backend=tauri (local-only)`);
+      console.log(`[ts.op.dispatch] op=${req.op} backend=bridge (local-only)`);
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         return await invoke<EngineResponse>('engine_request', { req });
       } catch (e) {
-        const message = e instanceof Error ? e.message : 'Tauri not available';
-        console.error(`[ts.op.dispatch] op=${req.op} backend=tauri FAILED: ${message}`);
-        return err('TAURI_NOT_READY', message);
+        const message = e instanceof Error ? e.message : 'Bridge not available';
+        console.error(`[ts.op.dispatch] op=${req.op} backend=bridge FAILED: ${message}`);
+        return err('BRIDGE_NOT_READY', message);
       }
     }
 

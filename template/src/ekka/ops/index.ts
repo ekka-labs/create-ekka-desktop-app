@@ -1,11 +1,10 @@
 /**
  * Operations
  *
- * Mirrors Rust src-tauri/src/ops/ and handlers/
+ * Mirrors Rust Bridge ops/ and handlers/
  */
 
 export * as auth from './auth';
-export * as debug from './debug';
 export * as home from './home';
 export * as paths from './paths';
 export * as runtime from './runtime';

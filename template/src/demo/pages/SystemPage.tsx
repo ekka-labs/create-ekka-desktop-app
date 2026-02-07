@@ -383,7 +383,7 @@ export function SystemPage({ darkMode }: SystemPageProps): ReactElement {
           <div style={styles.row}>
             <span style={styles.label}>Environment</span>
             <span style={{ ...styles.badge, ...styles.badgeBlue }}>
-              {info.runtime?.runtime === 'tauri' ? 'Desktop (Tauri)' : 'Web Browser'}
+              {info.runtime?.runtime === 'ekka-bridge' ? 'EKKA Desktop' : 'Web Browser'}
             </span>
           </div>
           <div style={styles.row}>

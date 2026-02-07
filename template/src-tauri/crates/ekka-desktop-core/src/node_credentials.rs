@@ -10,16 +10,15 @@
 //! - Credentials never logged
 //! - No OS keychain prompts
 
-use crate::bootstrap::resolve_home_path;
+use crate::bootstrap::{initialize_home, resolve_home_path};
 use crate::config;
 use crate::node_vault_store::{
-    has_node_secret, read_node_secret,
+    delete_node_secret, has_node_secret, read_node_secret, write_node_secret,
     SECRET_ID_NODE_CREDENTIALS,
 };
 use crate::security_epoch::resolve_security_epoch;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::RwLock;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -46,50 +45,12 @@ pub struct NodeAuthToken {
     pub expires_at: DateTime<Utc>,
 }
 
-impl NodeAuthToken {
-    /// Check if token is expired (with 60s buffer)
-    pub fn is_expired(&self) -> bool {
-        Utc::now() + chrono::Duration::seconds(60) >= self.expires_at
-    }
-}
-
-/// Thread-safe holder for node auth token
-pub struct NodeAuthTokenHolder {
-    inner: RwLock<Option<NodeAuthToken>>,
-}
-
-impl NodeAuthTokenHolder {
-    pub fn new() -> Self {
-        Self {
-            inner: RwLock::new(None),
-        }
-    }
-
-    pub fn get(&self) -> Option<NodeAuthToken> {
-        self.inner.read().ok()?.clone()
-    }
-
-    pub fn set(&self, token: NodeAuthToken) {
-        if let Ok(mut guard) = self.inner.write() {
-            *guard = Some(token);
-        }
-    }
-
-    /// Get valid token or None if missing/expired
-    pub fn get_valid(&self) -> Option<NodeAuthToken> {
-        let token = self.get()?;
-        if token.is_expired() {
-            None
-        } else {
-            Some(token)
-        }
-    }
-}
-
-impl Default for NodeAuthTokenHolder {
-    fn default() -> Self {
-        Self::new()
-    }
+/// Result of loading credentials
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialsStatus {
+    pub has_credentials: bool,
+    pub node_id: Option<String>,
 }
 
 /// Error type for credential operations
@@ -97,6 +58,7 @@ impl Default for NodeAuthTokenHolder {
 pub enum CredentialsError {
     VaultError(String),
     InvalidNodeId(String),
+    InvalidNodeSecret(String),
     NotConfigured,
     AuthFailed(u16, String),
     HttpError(String),
@@ -107,6 +69,7 @@ impl std::fmt::Display for CredentialsError {
         match self {
             CredentialsError::VaultError(msg) => write!(f, "Vault error: {}", msg),
             CredentialsError::InvalidNodeId(msg) => write!(f, "Invalid node_id: {}", msg),
+            CredentialsError::InvalidNodeSecret(msg) => write!(f, "Invalid node_secret: {}", msg),
             CredentialsError::NotConfigured => write!(f, "Node credentials not configured"),
             CredentialsError::AuthFailed(status, msg) => {
                 write!(f, "Node auth failed ({}): {}", status, msg)
@@ -122,6 +85,51 @@ impl std::error::Error for CredentialsError {}
 // =============================================================================
 // Core Functions
 // =============================================================================
+
+/// Store node credentials in vault
+///
+/// # Arguments
+/// * `node_id` - UUID of the node
+/// * `node_secret` - Secret key for the node (NEVER logged)
+///
+/// # Returns
+/// * `Ok(())` on success
+/// * `Err(CredentialsError)` on failure
+pub fn store_credentials(node_id: &Uuid, node_secret: &str) -> Result<(), CredentialsError> {
+    // Validate inputs
+    if node_secret.is_empty() {
+        return Err(CredentialsError::InvalidNodeSecret(
+            "node_secret cannot be empty".to_string(),
+        ));
+    }
+
+    // Initialize home if needed
+    let bootstrap = initialize_home().map_err(|e| CredentialsError::VaultError(e))?;
+    let home = bootstrap.home_path();
+    let epoch = resolve_security_epoch(home);
+
+    // Store node_id + node_secret as JSON
+    let creds = NodeCredentials {
+        node_id: node_id.to_string(),
+        node_secret: node_secret.to_string(),
+    };
+
+    let json = serde_json::to_vec(&creds)
+        .map_err(|e| CredentialsError::VaultError(format!("JSON encode error: {}", e)))?;
+
+    // Key derivation uses device_secret + epoch only (not node_id)
+    write_node_secret(home, epoch, SECRET_ID_NODE_CREDENTIALS, &json)
+        .map_err(|e| CredentialsError::VaultError(e.to_string()))?;
+
+    tracing::info!(
+        op = "node_credentials.stored",
+        storage = "vault",
+        node_id = %node_id,
+        "Node credentials stored in vault"
+    );
+
+    Ok(())
+}
 
 /// Load node credentials from vault
 ///
@@ -178,6 +186,53 @@ pub fn has_credentials() -> bool {
     has_creds
 }
 
+/// Get credentials status (has credentials + node_id if present)
+pub fn get_status() -> CredentialsStatus {
+    let node_id = load_credentials().ok().map(|(id, _)| id.to_string());
+    let has_creds = node_id.is_some();
+
+    CredentialsStatus {
+        has_credentials: has_creds,
+        node_id,
+    }
+}
+
+/// Clear node credentials from vault
+pub fn clear_credentials() -> Result<(), CredentialsError> {
+    let home = resolve_home_path().map_err(|e| CredentialsError::VaultError(e))?;
+
+    delete_node_secret(&home, SECRET_ID_NODE_CREDENTIALS)
+        .map_err(|e| CredentialsError::VaultError(e.to_string()))?;
+
+    tracing::info!(
+        op = "desktop.node.credentials.cleared",
+        "Node credentials cleared from vault"
+    );
+
+    Ok(())
+}
+
+/// Validate node_id format (must be valid UUID)
+pub fn validate_node_id(node_id_str: &str) -> Result<Uuid, CredentialsError> {
+    Uuid::parse_str(node_id_str)
+        .map_err(|e| CredentialsError::InvalidNodeId(format!("Invalid UUID format: {}", e)))
+}
+
+/// Validate node_secret (must be non-empty)
+pub fn validate_node_secret(node_secret: &str) -> Result<(), CredentialsError> {
+    if node_secret.is_empty() {
+        return Err(CredentialsError::InvalidNodeSecret(
+            "node_secret cannot be empty".to_string(),
+        ));
+    }
+    if node_secret.len() < 16 {
+        return Err(CredentialsError::InvalidNodeSecret(
+            "node_secret must be at least 16 characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 // =============================================================================
 // Node Authentication
 // =============================================================================
@@ -210,6 +265,31 @@ struct NodeAuthResponse {
     session_id: Option<String>,
     #[serde(alias = "expiresAtIsoUtc", alias = "expiresAt", alias = "expires_at")]
     expires_at_iso_utc: Option<String>,
+}
+
+/// Error response from auth endpoints
+#[derive(Debug, Deserialize)]
+struct AuthErrorResponse {
+    error: Option<String>,
+}
+
+// Error codes that indicate secret is invalid or revoked
+const ERROR_INVALID_SECRET: &str = "invalid_secret";
+const ERROR_SECRET_REVOKED: &str = "secret_revoked";
+const ERROR_INVALID_CREDENTIALS: &str = "invalid_credentials";
+
+/// Check if an auth failure indicates the secret is invalid or revoked.
+pub fn is_secret_error(status: u16, body: &str) -> bool {
+    if status == 401 || status == 403 {
+        if let Ok(err) = serde_json::from_str::<AuthErrorResponse>(body) {
+            if let Some(error) = err.error {
+                return error == ERROR_INVALID_SECRET
+                    || error == ERROR_SECRET_REVOKED
+                    || error == ERROR_INVALID_CREDENTIALS;
+            }
+        }
+    }
+    false
 }
 
 /// Authenticate node with server using node_id + node_secret

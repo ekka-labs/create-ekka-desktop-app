@@ -1,0 +1,30 @@
+[package]
+name = "ekka-desktop-core"
+version = "0.1.0"
+edition = "2021"
+description = "EKKA Desktop Core - Security-critical logic process (JSON-RPC over stdio)"
+
+# Prevent inheriting parent workspace
+[workspace]
+
+[build-dependencies]
+serde_json = "1"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4"] }
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.8"
+base64 = "0.22"
+hex = "0.4"
+anyhow = "1.0"
+
+# SDK dependencies (only the primitives we need)
+ekka-sdk-core = { path = "../../../../ekka-execution-node-sdk-rust/crates/framework/ekka-sdk-core" }
+
+[dev-dependencies]
+tempfile = "3"

@@ -19,7 +19,7 @@ const DEMO_HOME_PATH = `~/.local/share/${slugify(branding.name) || 'ekka-desktop
 
 /**
  * Demo backend using in-memory storage.
- * Used when Tauri engine is not available.
+ * Used when EKKA Bridge is not available.
  */
 export class DemoBackend implements Backend {
   private connected = false;

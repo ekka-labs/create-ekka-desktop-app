@@ -19,7 +19,6 @@ import { SystemPage } from './pages/SystemPage';
 import { AuditLogPage } from './pages/AuditLogPage';
 import { PathPermissionsPage } from './pages/PathPermissionsPage';
 import { VaultPage } from './pages/VaultPage';
-import { DocGenPage } from './pages/DocGenPage';
 import { RunnerPage } from './pages/RunnerPage';
 import { LoginPage } from './pages/LoginPage';
 import { HomeSetupPage } from './pages/HomeSetupPage';
@@ -33,34 +32,6 @@ interface DemoState {
   homeStatus: HomeStatus | null;
   connected: boolean;
   error: string | null;
-}
-
-// DocGen state persisted across tab switches
-interface DocGenPersistedState {
-  runId: string | null;
-  folder: string | null;
-}
-
-const DOCGEN_STORAGE_KEY = 'ekka.docgen.state';
-
-function loadDocGenState(): DocGenPersistedState {
-  try {
-    const saved = localStorage.getItem(DOCGEN_STORAGE_KEY);
-    if (saved) {
-      return JSON.parse(saved) as DocGenPersistedState;
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return { runId: null, folder: null };
-}
-
-function saveDocGenState(state: DocGenPersistedState): void {
-  try {
-    localStorage.setItem(DOCGEN_STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // Ignore storage errors
-  }
 }
 
 export function DemoApp(): ReactElement {
@@ -78,14 +49,6 @@ export function DemoApp(): ReactElement {
     connected: false,
     error: null,
   });
-
-  // DocGen state - persisted to localStorage
-  const [docGenState, setDocGenState] = useState<DocGenPersistedState>(loadDocGenState);
-
-  const handleDocGenStateChange = (newState: DocGenPersistedState) => {
-    setDocGenState(newState);
-    saveDocGenState(newState);
-  };
 
   useEffect(() => {
     void initializeApp();
@@ -287,13 +250,6 @@ export function DemoApp(): ReactElement {
       {state.error && <div style={errorStyle}>{state.error}</div>}
       {selectedPage === 'path-permissions' && <PathPermissionsPage darkMode={darkMode} />}
       {selectedPage === 'vault' && <VaultPage darkMode={darkMode} />}
-      {selectedPage === 'doc-gen' && (
-        <DocGenPage
-          darkMode={darkMode}
-          persistedState={docGenState}
-          onStateChange={handleDocGenStateChange}
-        />
-      )}
       {selectedPage === 'runner' && <RunnerPage darkMode={darkMode} />}
       {selectedPage === 'audit-log' && <AuditLogPage darkMode={darkMode} />}
       {selectedPage === 'system' && <SystemPage darkMode={darkMode} />}

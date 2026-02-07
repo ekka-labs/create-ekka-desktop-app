@@ -24,6 +24,14 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://api.ekka.ai/desktop/releases/latest.json"
+      ],
+      "pubkey": "REPLACE_WITH_TAURI_PUBLIC_KEY"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
@@ -34,6 +42,7 @@
     "resources": [
       "resources/ekka-engine-bootstrap"
     ],
+    "createUpdaterArtifacts": true,
     "macOS": {
       "minimumSystemVersion": "10.15"
     }

@@ -7,38 +7,7 @@ use crate::types::EngineResponse;
 use ekka_sdk_core::ekka_ops::home;
 use serde_json::json;
 
-/// Handle home.status operation
-pub fn handle_status(state: &EngineState) -> EngineResponse {
-    let ctx = match state.to_runtime_context() {
-        Some(c) => c,
-        None => {
-            // No context yet - return pre-login state
-            let home_path = state
-                .home_path
-                .lock()
-                .ok()
-                .and_then(|p| p.clone())
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
-
-            return EngineResponse::ok(json!({
-                "state": "BOOTSTRAP_PRE_LOGIN",
-                "homePath": home_path,
-                "grantPresent": false,
-                "reason": null,
-            }));
-        }
-    };
-
-    let status = home::status(&ctx);
-
-    EngineResponse::ok(json!({
-        "state": status.state,
-        "homePath": status.home_path,
-        "grantPresent": status.grant_present,
-        "reason": status.reason,
-    }))
-}
+// handle_status removed — now handled by Desktop Core (BS#19)
 
 /// Handle home.grant operation
 pub fn handle_grant(state: &EngineState) -> EngineResponse {

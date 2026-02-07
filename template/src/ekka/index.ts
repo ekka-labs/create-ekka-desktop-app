@@ -501,8 +501,6 @@ export {
   formatExpiryInfo,
 } from './utils/time';
 
-export { generateIdempotencyKey } from './utils/idempotency';
-
 // =============================================================================
 // AUDIT (client-side event logging)
 // =============================================================================
