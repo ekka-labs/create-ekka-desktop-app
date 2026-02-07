@@ -7,6 +7,7 @@ edition = "2021"
 
 # Prevent inheriting parent workspace
 [workspace]
+members = ["crates/ekka-desktop-core"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

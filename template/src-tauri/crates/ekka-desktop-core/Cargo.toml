@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "EKKA Desktop Core - Security-critical logic process (JSON-RPC over stdio)"
 
-# Prevent inheriting parent workspace
-[workspace]
-
 [build-dependencies]
 serde_json = "1"
 

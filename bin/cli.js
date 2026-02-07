@@ -240,13 +240,13 @@ To get started:
 
   cd ${projectName}
   npm install
-  npm run tauri:dev
+  npm run ekka:dev
 
 Configuration:
   Edit app.config.json to change app identity or engine URL.
 
 Build:
-  npm run tauri:build
+  npm run ekka:build
 `);
 }
 

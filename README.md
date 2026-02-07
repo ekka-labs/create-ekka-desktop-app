@@ -8,7 +8,7 @@ Scaffold a new EKKA desktop app with one command. Zero config, batteries include
 npx create-ekka-desktop-app my-app
 cd my-app
 npm install
-npm run tauri:dev
+npm run ekka:dev
 ```
 
 That's it. You now have a native desktop app running.
@@ -34,14 +34,14 @@ my-app/
 npm start
 
 # Desktop window (native)
-npm run tauri:dev
+npm run ekka:dev
 ```
 
 ## Build
 
 ```bash
 # Create distributable .app
-npm run tauri:build
+npm run ekka:build
 ```
 
 Output: `src-tauri/target/release/bundle/macos/<AppName>.app`
@@ -110,8 +110,8 @@ When you're ready for production:
 | Command | Description |
 |---------|-------------|
 | `npm start` | Start dev server (web) |
-| `npm run tauri:dev` | Start dev server (desktop) |
-| `npm run tauri:build` | Build distributable app |
+| `npm run ekka:dev` | Start dev server (desktop) |
+| `npm run ekka:build` | Build distributable app |
 | `npm run lint` | Run ESLint |
 | `npm run build` | Build frontend only |
 
