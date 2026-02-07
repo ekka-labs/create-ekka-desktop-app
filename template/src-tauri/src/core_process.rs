@@ -303,33 +303,48 @@ fn find_core_binary() -> Result<std::path::PathBuf, String> {
         }
     }
 
-    // 3. Cargo target directory (dev builds)
+    // 3. Workspace target directory (dev builds)
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let dev_path = std::path::PathBuf::from(manifest_dir)
-        .join("crates")
-        .join("ekka-desktop-core")
+    for profile in &["debug", "release"] {
+        let candidate = std::path::PathBuf::from(manifest_dir)
+            .join("target")
+            .join(profile)
+            .join("ekka-desktop-core");
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    // 4. Dev convenience: auto-build on first run
+    tracing::info!(
+        op = "core.binary.auto_build",
+        "Desktop Core binary not found — building automatically..."
+    );
+    let status = Command::new("cargo")
+        .args(["build", "-p", "ekka-desktop-core"])
+        .current_dir(manifest_dir)
+        .status()
+        .map_err(|e| format!("Failed to run cargo build: {}", e))?;
+
+    if !status.success() {
+        return Err(format!(
+            "Failed to auto-build Desktop Core (exit {:?}). Build manually:\n  \
+             cd {} && cargo build -p ekka-desktop-core",
+            status.code(),
+            manifest_dir
+        ));
+    }
+
+    let built = std::path::PathBuf::from(manifest_dir)
         .join("target")
         .join("debug")
         .join("ekka-desktop-core");
-    if dev_path.exists() {
-        return Ok(dev_path);
-    }
-
-    // Also check release
-    let release_path = std::path::PathBuf::from(manifest_dir)
-        .join("crates")
-        .join("ekka-desktop-core")
-        .join("target")
-        .join("release")
-        .join("ekka-desktop-core");
-    if release_path.exists() {
-        return Ok(release_path);
+    if built.exists() {
+        return Ok(built);
     }
 
     Err(format!(
-        "Desktop Core binary not found. Build it first:\n  \
-         cd {}/crates/ekka-desktop-core && cargo build\n  \
-         Or set EKKA_DESKTOP_CORE_BIN env var.",
-        manifest_dir
+        "Desktop Core binary not found after build. Expected at: {}",
+        built.display()
     ))
 }
