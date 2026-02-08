@@ -119,6 +119,12 @@ fn dispatch(req: &Request) -> Response {
         "nodeSession.ensureIdentity" => handle_ensure_node_identity(&req.id, &req.payload),
         "runtime.info" => handle_runtime_info(&req.id, &req.payload),
         "home.status" => handle_home_status(&req.id, &req.payload),
+        "execution.plans.list" => handle_execution_proxy_get(&req.id, &req.payload, "/auth/admin/execution/plans", "execution.plans.list", &["limit", "offset", "search"]),
+        "execution.plans.get" => handle_execution_proxy_get_by_id(&req.id, &req.payload, "id", "/auth/admin/execution/plans", "execution.plans.get"),
+        "execution.plans.runs.list" => handle_execution_plan_runs_list(&req.id, &req.payload),
+        "execution.runs.get" => handle_execution_proxy_get_by_id(&req.id, &req.payload, "runId", "/engine/admin/execution/runs", "execution.runs.get"),
+        "execution.runs.events" => handle_execution_runs_events(&req.id, &req.payload),
+        "execution.runs.start" => handle_execution_runs_start(&req.id, &req.payload),
         "debug.isDevMode" => handle_is_dev_mode(&req.id),
         _ => Response::err(
             req.id.clone(),
@@ -1126,6 +1132,199 @@ fn handle_workflow_runs_get(id: &str, payload: &Value) -> Response {
                 Response::err(id.to_string(), "REQUEST_FAILED", &e.to_string())
             }
         }
+    }
+}
+
+// =============================================================================
+// Execution Plans (engine API proxies)
+// =============================================================================
+
+/// Reusable: authenticated GET proxy with optional query params.
+/// `query_keys` names payload fields to forward as ?key=value.
+fn handle_execution_proxy_get(
+    id: &str,
+    payload: &Value,
+    path: &str,
+    action: &str,
+    query_keys: &[&str],
+) -> Response {
+    let engine_url = config::engine_url();
+    let token = match get_cached_or_fresh_token(engine_url) {
+        Ok(t) => t,
+        Err(e) => return Response::err(id.to_string(), "NOT_AUTHENTICATED", &e),
+    };
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return Response::err(id.to_string(), "HTTP_CLIENT_ERROR", &e.to_string()),
+    };
+
+    let mut url = format!("{}{}", engine_url, path);
+
+    // Build query string from payload fields
+    let mut qs_parts: Vec<String> = Vec::new();
+    for key in query_keys {
+        if let Some(val) = payload.get(*key) {
+            if let Some(s) = val.as_str() {
+                qs_parts.push(format!("{}={}", key, s));
+            } else if let Some(n) = val.as_i64() {
+                qs_parts.push(format!("{}={}", key, n));
+            }
+        }
+    }
+    if !qs_parts.is_empty() {
+        url = format!("{}?{}", url, qs_parts.join("&"));
+    }
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let send = |bearer: &str| -> Result<reqwest::blocking::Response, reqwest::Error> {
+        client
+            .get(&url)
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", bearer))
+            .header("X-EKKA-PROOF-TYPE", "jwt")
+            .header("X-REQUEST-ID", &request_id)
+            .header("X-EKKA-CORRELATION-ID", &request_id)
+            .header("X-EKKA-MODULE", "desktop")
+            .header("X-EKKA-ACTION", action)
+            .header("X-EKKA-CLIENT", config::app_slug())
+            .header("X-EKKA-CLIENT-VERSION", "0.2.0")
+            .send()
+    };
+
+    let resp = match send(&token.token) {
+        Ok(r) => r,
+        Err(e) => return Response::err(id.to_string(), "REQUEST_FAILED", &e.to_string()),
+    };
+
+    if resp.status().as_u16() == 401 {
+        clear_auth_cache();
+        let retry_token = match get_cached_or_fresh_token(engine_url) {
+            Ok(t) => t,
+            Err(e) => return Response::err(id.to_string(), "NOT_AUTHENTICATED", &e),
+        };
+        let retry_resp = match send(&retry_token.token) {
+            Ok(r) => r,
+            Err(e) => return Response::err(id.to_string(), "REQUEST_FAILED", &e.to_string()),
+        };
+        return parse_proxy_response(id, retry_resp);
+    }
+
+    parse_proxy_response(id, resp)
+}
+
+/// Reusable: authenticated GET proxy for /path/{id}
+fn handle_execution_proxy_get_by_id(
+    id: &str,
+    payload: &Value,
+    id_field: &str,
+    base_path: &str,
+    action: &str,
+) -> Response {
+    let resource_id = match payload.get(id_field).and_then(|v| v.as_str()) {
+        Some(v) => v,
+        None => return Response::err(id.to_string(), "INVALID_PAYLOAD", &format!("'{}' is required", id_field)),
+    };
+    let path = format!("{}/{}", base_path, resource_id);
+    handle_execution_proxy_get(id, payload, &path, action, &[])
+}
+
+/// execution.plans.runs.list — GET /auth/admin/execution/plans/{planId}/runs
+fn handle_execution_plan_runs_list(id: &str, payload: &Value) -> Response {
+    let plan_id = match payload.get("planId").and_then(|v| v.as_str()) {
+        Some(v) => v,
+        None => return Response::err(id.to_string(), "INVALID_PAYLOAD", "'planId' is required"),
+    };
+    let path = format!("/auth/admin/execution/plans/{}/runs", plan_id);
+    handle_execution_proxy_get(id, payload, &path, "execution.plans.runs.list", &["limit", "offset"])
+}
+
+/// execution.runs.events — GET /engine/admin/execution/runs/{runId}/events
+fn handle_execution_runs_events(id: &str, payload: &Value) -> Response {
+    let run_id = match payload.get("runId").and_then(|v| v.as_str()) {
+        Some(v) => v,
+        None => return Response::err(id.to_string(), "INVALID_PAYLOAD", "'runId' is required"),
+    };
+    let path = format!("/engine/admin/execution/runs/{}/events", run_id);
+    handle_execution_proxy_get(id, payload, &path, "execution.runs.events", &[])
+}
+
+/// execution.runs.start — POST /engine/execution/runs
+fn handle_execution_runs_start(id: &str, payload: &Value) -> Response {
+    let engine_url = config::engine_url();
+    let token = match get_cached_or_fresh_token(engine_url) {
+        Ok(t) => t,
+        Err(e) => return Response::err(id.to_string(), "NOT_AUTHENTICATED", &e),
+    };
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return Response::err(id.to_string(), "HTTP_CLIENT_ERROR", &e.to_string()),
+    };
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let body = serde_json::json!({
+        "plan_id": payload.get("plan_id"),
+        "inputs": payload.get("inputs").unwrap_or(&serde_json::json!({})),
+    });
+
+    let send = |bearer: &str| -> Result<reqwest::blocking::Response, reqwest::Error> {
+        client
+            .post(format!("{}/engine/execution/runs", engine_url))
+            .header("Content-Type", "application/json")
+            .header("Authorization", format!("Bearer {}", bearer))
+            .header("X-EKKA-PROOF-TYPE", "jwt")
+            .header("X-REQUEST-ID", &request_id)
+            .header("X-EKKA-CORRELATION-ID", &request_id)
+            .header("X-EKKA-MODULE", "desktop")
+            .header("X-EKKA-ACTION", "execution.runs.start")
+            .header("X-EKKA-CLIENT", config::app_slug())
+            .header("X-EKKA-CLIENT-VERSION", "0.2.0")
+            .json(&body)
+            .send()
+    };
+
+    let resp = match send(&token.token) {
+        Ok(r) => r,
+        Err(e) => return Response::err(id.to_string(), "REQUEST_FAILED", &e.to_string()),
+    };
+
+    if resp.status().as_u16() == 401 {
+        clear_auth_cache();
+        let retry_token = match get_cached_or_fresh_token(engine_url) {
+            Ok(t) => t,
+            Err(e) => return Response::err(id.to_string(), "NOT_AUTHENTICATED", &e),
+        };
+        let retry_resp = match send(&retry_token.token) {
+            Ok(r) => r,
+            Err(e) => return Response::err(id.to_string(), "REQUEST_FAILED", &e.to_string()),
+        };
+        return parse_proxy_response(id, retry_resp);
+    }
+
+    parse_proxy_response(id, resp)
+}
+
+/// Parse an engine HTTP response into a JSON-RPC Response (reused by all execution proxies)
+fn parse_proxy_response(id: &str, resp: reqwest::blocking::Response) -> Response {
+    let status = resp.status();
+    if status.is_success() {
+        match resp.json::<serde_json::Value>() {
+            Ok(data) => Response::ok(id.to_string(), data),
+            Err(e) => Response::err(id.to_string(), "PARSE_ERROR", &e.to_string()),
+        }
+    } else {
+        let status_code = status.as_u16();
+        let body = resp.text().unwrap_or_default();
+        let msg = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|v| v.get("message").or(v.get("error")).and_then(|m| m.as_str()).map(|s| s.to_string()))
+            .unwrap_or_else(|| format!("HTTP {}", status_code));
+        Response::err(id.to_string(), "EXECUTION_PROXY_FAILED", &format!("HTTP {}: {}", status_code, msg))
     }
 }
 

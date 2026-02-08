@@ -319,6 +319,14 @@ pub fn engine_request(req: EngineRequest, state: State<EngineState>, app_handle:
             handlers::vault::handle_audit_list(&req.payload, &state)
         }
 
+        // Execution Plans (proxied to Desktop Core → engine API)
+        "execution.plans.list" => state.core_process.request("execution.plans.list", &req.payload),
+        "execution.plans.get" => state.core_process.request("execution.plans.get", &req.payload),
+        "execution.plans.runs.list" => state.core_process.request("execution.plans.runs.list", &req.payload),
+        "execution.runs.get" => state.core_process.request("execution.runs.get", &req.payload),
+        "execution.runs.events" => state.core_process.request("execution.runs.events", &req.payload),
+        "execution.runs.start" => state.core_process.request("execution.runs.start", &req.payload),
+
         // Unknown
         _ => EngineResponse::err("INVALID_OP", &format!("Unknown operation: {}", req.op)),
     }

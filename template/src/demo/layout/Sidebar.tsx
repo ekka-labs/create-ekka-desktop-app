@@ -5,7 +5,7 @@
 
 import { type CSSProperties, type ReactElement } from 'react';
 
-export type Page = 'audit-log' | 'path-permissions' | 'vault' | 'runner' | 'system';
+export type Page = 'audit-log' | 'path-permissions' | 'vault' | 'runner' | 'execution-plans' | 'system';
 
 interface SidebarProps {
   selectedPage: Page;
@@ -126,6 +126,7 @@ export function Sidebar({ selectedPage, onNavigate, darkMode }: SidebarProps): R
         <NavButton page="path-permissions" label="Path Permissions" icon={<PathIcon />} />
         <NavButton page="vault" label="Vault" icon={<VaultIcon />} />
         <NavButton page="runner" label="Runner" icon={<RunnerIcon />} />
+        <NavButton page="execution-plans" label="Execution Plans" icon={<ExecutionIcon />} />
         <NavButton page="audit-log" label="Audit Log" icon={<AuditIcon />} />
       </nav>
 
@@ -177,6 +178,15 @@ function RunnerIcon(): ReactElement {
       <path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z" />
       <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z" />
       <path d="M8 8a.5.5 0 1 1 0-1 .5.5 0 0 1 0 1z" />
+    </svg>
+  );
+}
+
+function ExecutionIcon(): ReactElement {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ opacity: 0.7 }}>
+      <path d="M6 3.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 4a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5zm0 4a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1h-5a.5.5 0 0 1-.5-.5z" />
+      <path d="M2.5 3l2 1.5L2.5 6V3zm0 4l2 1.5L2.5 10V7zm0 4l2 1.5-2 1.5V11z" />
     </svg>
   );
 }

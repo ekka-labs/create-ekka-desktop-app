@@ -20,6 +20,7 @@ import { AuditLogPage } from './pages/AuditLogPage';
 import { PathPermissionsPage } from './pages/PathPermissionsPage';
 import { VaultPage } from './pages/VaultPage';
 import { RunnerPage } from './pages/RunnerPage';
+import { ExecutionPlansPage } from './pages/ExecutionPlansPage';
 import { LoginPage } from './pages/LoginPage';
 import { HomeSetupPage } from './pages/HomeSetupPage';
 import { SetupWizard } from './components/SetupWizard';
@@ -251,6 +252,7 @@ export function DemoApp(): ReactElement {
       {selectedPage === 'path-permissions' && <PathPermissionsPage darkMode={darkMode} />}
       {selectedPage === 'vault' && <VaultPage darkMode={darkMode} />}
       {selectedPage === 'runner' && <RunnerPage darkMode={darkMode} />}
+      {selectedPage === 'execution-plans' && <ExecutionPlansPage darkMode={darkMode} />}
       {selectedPage === 'audit-log' && <AuditLogPage darkMode={darkMode} />}
       {selectedPage === 'system' && <SystemPage darkMode={darkMode} />}
     </Shell>
