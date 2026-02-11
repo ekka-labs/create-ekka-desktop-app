@@ -210,6 +210,7 @@ export function ExecutionRunDetailPage({ runId, onBack, darkMode }: ExecutionRun
     if (didLoadRef.current) return;
     didLoadRef.current = true;
     loadDetail();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function toggleExpand(eventId: string) {

@@ -180,6 +180,7 @@ export function ExecutionPlansPage({ darkMode, onViewRun }: ExecutionPlansPagePr
       .catch((e) => setError(e.message));
 
     loadRuns(selectedPlanId, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPlanId]);
 
   const loadRuns = useCallback((planId: string, offset: number) => {
